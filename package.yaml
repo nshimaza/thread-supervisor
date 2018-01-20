@@ -25,7 +25,10 @@ dependencies:
 library:
   source-dirs: src
   dependencies:
+  - async
   - containers
+  - data-default
+  - safe-exceptions
   - stm
 
 executables:
