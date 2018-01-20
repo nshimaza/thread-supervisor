@@ -3,6 +3,7 @@ module Control.Concurrent.Supervisor
       MessageQueue (..)
     , newStateMachine
     , sendMessage
+    , CallTimeout (..)
     , ServerQueue (..)
     , newServer
     , cast
