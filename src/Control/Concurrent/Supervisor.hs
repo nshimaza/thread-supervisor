@@ -1,3 +1,8 @@
-module Control.Concurrent.Supervisor where
+module Control.Concurrent.Supervisor
+    (
+      MessageQueue (..)
+    , makeStateMachine
+    , sendMessage
+    )where
 
-import Control.Concurrent.SupervisorInternal
+import           Control.Concurrent.SupervisorInternal

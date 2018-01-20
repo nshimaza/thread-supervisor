@@ -26,6 +26,7 @@ library:
   source-dirs: src
   dependencies:
   - containers
+  - stm
 
 executables:
   async-supervisor-exe:
@@ -47,6 +48,7 @@ tests:
     - -rtsopts
     - -with-rtsopts=-N
     dependencies:
+    - stm
     - hspec
     - QuickCheck
     - async-supervisor
