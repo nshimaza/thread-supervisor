@@ -1,8 +1,13 @@
 module Control.Concurrent.Supervisor
     (
       MessageQueue (..)
-    , makeStateMachine
+    , newStateMachine
     , sendMessage
+    , ServerQueue (..)
+    , newServer
+    , cast
+    , call
+    , callAsync
     )where
 
 import           Control.Concurrent.SupervisorInternal

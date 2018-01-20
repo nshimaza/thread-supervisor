@@ -12,13 +12,13 @@ import           System.Timeout                (timeout)
 
 type MessageQueue a = TQueue a
 
-makeStateMachine
+newStateMachine
     :: MessageQueue message -- ^ Event input queue of the state machine.
     -> state                -- ^ Initial state of the state machinwe.
     -> (state -> message -> IO (Either result state))
                             -- ^ Event handler which processes event and returns result or next state.
     -> IO result
-makeStateMachine inbox initialState messageHandler = go $ Right initialState
+newStateMachine inbox initialState messageHandler = go $ Right initialState
   where
     go (Right state) = atomically (readTQueue inbox) >>= messageHandler state >>= go
     go (Left result) = pure result
@@ -36,15 +36,15 @@ data ServerCommand arg ret
 
 type ServerQueue arg ret = MessageQueue (ServerCommand arg ret)
 
-makeServer
+newServer
     :: ServerQueue arg ret                          -- ^ Message queue.
     -> IO state                                     -- ^ Initialize.
     -> (state -> IO a)                              -- ^ Cleanup.
     -> (state -> arg -> IO (Either b state))        -- ^ Cast message handler.
     -> (state -> arg -> IO (ret, Either b state))   -- ^ Call message handler.
     -> IO b
-makeServer inbox init cleanup castHandler callHandler = bracket init cleanup $ \state ->
-    makeStateMachine inbox state server
+newServer inbox init cleanup castHandler callHandler = bracket init cleanup $ \state ->
+    newStateMachine inbox state server
   where
     server state (Cast arg)     = castHandler state arg
     server state (Call arg ret) = do

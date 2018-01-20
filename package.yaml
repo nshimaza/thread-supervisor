@@ -51,6 +51,8 @@ tests:
     - -rtsopts
     - -with-rtsopts=-N
     dependencies:
+    - async
+    - data-default
     - stm
     - hspec
     - QuickCheck
