@@ -54,6 +54,7 @@ tests:
     - async
     - data-default
     - stm
+    - safe-exceptions
     - hspec
     - QuickCheck
     - async-supervisor

@@ -1,15 +1,25 @@
 module Control.Concurrent.SupervisorInternal where
 
-import           Control.Concurrent.Async      (Async, async)
+import           Control.Concurrent            (ThreadId, myThreadId)
+import           Control.Concurrent.Async      (Async, async, asyncThreadId, asyncWithUnmask)
 import           Control.Concurrent.STM.TMVar  (TMVar, newEmptyTMVarIO,
                                                 putTMVar, takeTMVar)
 import           Control.Concurrent.STM.TQueue (TQueue, readTQueue, writeTQueue)
-import           Control.Exception.Safe        (bracket)
+import           Control.Exception.Safe        (SomeException, bracket,
+                                                catchAsync, isSyncException,
+                                                mask_, uninterruptibleMask_)
 import           Control.Monad.STM             (atomically)
 import           Data.Default
+import           Data.Foldable                 (for_, traverse_)
+import           Data.IORef                    (IORef, modifyIORef', newIORef,
+                                                readIORef, writeIORef)
+import           Data.Map.Strict               (Map, delete, empty, insert,
+                                                keys, lookup)
 import           System.Timeout                (timeout)
 
-
+{-
+    Basic message queue and state machine behavior.
+-}
 type MessageQueue a = TQueue a
 
 newStateMachine
@@ -30,6 +40,9 @@ sendMessage
 sendMessage q = atomically . writeTQueue q
 
 
+{-
+    Sever behavior
+-}
 data ServerCommand arg ret
     = Cast arg
     | Call arg (TMVar ret)
@@ -95,3 +108,35 @@ callAsync
     -> (Maybe ret -> IO a)  -- ^ callback to process return value of the call.  Nothing is given on timeout.
     -> IO (Async a)
 callAsync timeout srv req cont = async $ call timeout srv req >>= cont
+
+
+{-
+    Supervisable thread.
+-}
+data Restart = Permanent | Transient | Temporary deriving (Eq, Show)
+data ExitReason = Normal | UncaughtException | Killed deriving (Eq, Show)
+type Monitor = ExitReason -> ThreadId -> IO ()
+data ProcessSpec = ProcessSpec [Monitor] Restart (IO ())
+
+newProcessSpec :: [Monitor] -> Restart -> IO () -> ProcessSpec
+newProcessSpec = ProcessSpec
+
+addMonitor :: Monitor -> ProcessSpec -> ProcessSpec
+addMonitor monitor (ProcessSpec monitors restart action) = ProcessSpec (monitor:monitors) restart action
+
+type ProcessMap = IORef (Map ThreadId (Async (), ProcessSpec))
+
+newProcessMap :: IO ProcessMap
+newProcessMap = newIORef empty
+
+newProcess
+    :: ProcessMap   -- ^ Map of current live processes where the new process to be added.
+     -> ProcessSpec -- ^ Specification of newly started process.
+     -> IO (Async ())
+newProcess procMap procSpec@(ProcessSpec monitors _ action) = mask_ $ do
+    a <- asyncWithUnmask $ \unmask ->
+        let notify reason   = uninterruptibleMask_ . traverse_ (\monitor -> myThreadId >>= monitor reason)
+            toReason e      = if isSyncException (e :: SomeException) then UncaughtException else Killed
+        in (unmask action *> notify Normal monitors) `catchAsync` \e -> notify (toReason e) monitors
+    modifyIORef' procMap $ insert (asyncThreadId a) (a, procSpec)
+    pure a
