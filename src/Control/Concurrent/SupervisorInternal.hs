@@ -40,15 +40,14 @@ newServer
     :: ServerQueue arg ret                          -- ^ Message queue.
     -> IO state                                     -- ^ Initialize.
     -> (state -> IO a)                              -- ^ Cleanup.
-    -> (state -> arg -> IO (Either b state))        -- ^ Cast message handler.
     -> (state -> arg -> IO (ret, Either b state))   -- ^ Call message handler.
     -> IO b
-newServer inbox init cleanup castHandler callHandler = bracket init cleanup $ \state ->
+newServer inbox init cleanup handler = bracket init cleanup $ \state ->
     newStateMachine inbox state server
   where
-    server state (Cast arg)     = castHandler state arg
+    server state (Cast arg)     = snd <$> handler state arg
     server state (Call arg ret) = do
-        (result, nextState) <- callHandler state arg
+        (result, nextState) <- handler state arg
         atomically $ putTMVar ret result
         pure nextState
 
