@@ -41,7 +41,7 @@ newStateMachine
     -> IO result
 newStateMachine inbox initialState messageHandler = go $ Right initialState
   where
-    go (Right state) = atomically (readTQueue inbox) >>= messageHandler state >>= go
+    go (Right state) = go =<< mask_ (messageHandler state =<< atomically (readTQueue inbox))
     go (Left result) = pure result
 
 sendMessage
@@ -102,7 +102,7 @@ call (CallTimeout usec) srv req = do
     sendMessage srv $ Call req r
     timeout usec . atomically . takeTMVar $ r
 
-{-
+{-|
     Make an asynchronous call to a server and give result in CPS style.
     The return value is delivered to given callback function.  It also can fail by timeout.
     It is useful to convert return value of 'call' to a message of calling process asynchronously
@@ -241,64 +241,41 @@ newSupervisor
                         --   the supervisor will restart itself.
     -> [ProcessSpec]    -- ^ List of supervised process specifications.
     -> IO ()
-newSupervisor inbox strategy maxR maxT procSpecs =
-    bracket newProcessMap (killAllSupervisedProcess inbox) initSupervisor
-      where
-        initSupervisor procMap = do
-            startAllSupervisedProcess inbox procMap procSpecs
-            supervisorLoop inbox (restartChild strategy procMap) maxR isIntense procMap procSpecs
-
-        restartChild OneForOne pmap spec = void $ newSupervisedProcess inbox pmap spec
-        restartChild OneForAll pmap _    = killAllSupervisedProcess inbox pmap *> startAllSupervisedProcess inbox pmap procSpecs
-
-        isIntense = isRestartIntenseNow maxT
-
-supervisorLoop
-    :: SupervisorQueue                          -- ^ Inbox message queue of the supervisor.
-    -> (ProcessSpec -> IO ())                   -- ^ Function to perform process restart.
-    -> RestartIntensity                         -- ^ Maximum restart intensity of the process.  Used with the next argument.
-                                                --   If process crashed more than this value within given period,
-                                                --   the supervisor will restart itself.
-    -> (RestartHist -> IO (Bool, RestartHist))  -- ^ Check if SV restart is needed and update restart history.
-    -> ProcessMap                               -- ^ Map of current live processes which the supervisor monitors.
-    -> [ProcessSpec]                            -- ^ List of supervised process specifications.
-    -> IO ()
-supervisorLoop inbox restartChild maxR isIntense procMap procSpecs = go (Just $ newRestartHist maxR)
+newSupervisor inbox strategy maxR maxT procSpecs = bracket newProcessMap (killAllSupervisedProcess inbox) initSupervisor
   where
-    go :: Maybe RestartHist -> IO ()
-    go (Just hist) =do
-        next <- mask_ $ do
-            cmd <- atomically (readTQueue inbox)
-            processSupervisorCommand hist cmd
-        go next
-    go Nothing = pure ()
-
-    processSupervisorCommand :: RestartHist -> SupervisorCommand -> IO (Maybe RestartHist)
-    processSupervisorCommand hist (Down reason tid) = do
-        pmap <- readIORef procMap
-        processRestart $ snd <$> lookup tid pmap
+    initSupervisor procMap = do
+        startAllSupervisedProcess inbox procMap procSpecs
+        newStateMachine inbox (newRestartHist maxR) supervisorCommandHandler
       where
-        processRestart :: Maybe ProcessSpec -> IO (Maybe RestartHist)
-        processRestart (Just (procSpec@(ProcessSpec _ restart _))) = do
-            modifyIORef' procMap $ delete tid
-            if restartNeeded restart reason
-            then do
-                (intense, nextHist) <- isIntense hist
-                if intense
-                then pure Nothing
-                else restartChild procSpec $> Just nextHist
-            else
-                pure (Just hist)
-        processRestart Nothing = pure $ Just hist
+        restartChild OneForOne procMap spec = void $ newSupervisedProcess inbox procMap spec
+        restartChild OneForAll procMap _    = killAllSupervisedProcess inbox procMap *> startAllSupervisedProcess inbox procMap procSpecs
 
-        restartNeeded Temporary _      = False
-        restartNeeded Transient Normal = False
-        restartNeeded _         _      = True
+        supervisorCommandHandler :: RestartHist -> SupervisorCommand -> IO (Either () RestartHist)
+        supervisorCommandHandler hist (Down reason tid) = do
+            pmap <- readIORef procMap
+            processRestart $ snd <$> lookup tid pmap
+          where
+            processRestart :: Maybe ProcessSpec -> IO (Either () RestartHist)
+            processRestart (Just (procSpec@(ProcessSpec _ restart _))) = do
+                modifyIORef' procMap $ delete tid
+                if restartNeeded restart reason
+                then do
+                    (intense, nextHist) <- isRestartIntenseNow maxT hist
+                    if intense
+                    then pure $ Left ()
+                    else restartChild strategy procMap procSpec $> Right nextHist
+                else
+                    pure $ Right hist
+            processRestart Nothing = pure $ Right hist
 
-    processSupervisorCommand hist (StartChild (ProcessSpec monitors _ proc) callRet) = do
-        a <- newSupervisedProcess inbox procMap (ProcessSpec monitors Temporary proc)
-        atomically $ putTMVar callRet a
-        pure (Just hist)
+            restartNeeded Temporary _      = False
+            restartNeeded Transient Normal = False
+            restartNeeded _         _      = True
+
+        supervisorCommandHandler hist (StartChild (ProcessSpec monitors _ proc) callRet) = do
+            a <- newSupervisedProcess inbox procMap (ProcessSpec monitors Temporary proc)
+            atomically $ putTMVar callRet a
+            pure $ Right hist
 
 newChild :: CallTimeout -> SupervisorQueue -> ProcessSpec -> IO (Maybe (Async ()))
 newChild (CallTimeout usec) sv spec = do
