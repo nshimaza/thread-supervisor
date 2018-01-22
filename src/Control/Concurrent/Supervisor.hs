@@ -18,6 +18,11 @@ module Control.Concurrent.Supervisor
     , ProcessMap
     , newProcessMap
     , newProcess
+    , RestartIntensity (..)
+    , RestartPeriod (..)
+    , newSupervisor
+    , newSimpleOneForOneSupervisor
+    , newChild
     )where
 
 import           Control.Concurrent.SupervisorInternal

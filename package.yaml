@@ -26,6 +26,7 @@ library:
   source-dirs: src
   dependencies:
   - async
+  - clock
   - containers
   - data-default
   - safe-exceptions
@@ -52,6 +53,7 @@ tests:
     - -with-rtsopts=-N
     dependencies:
     - async
+    - clock
     - data-default
     - stm
     - safe-exceptions

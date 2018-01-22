@@ -1,21 +1,31 @@
 module Control.Concurrent.SupervisorInternal where
 
+import           Prelude                       hiding (lookup)
+
 import           Control.Concurrent            (ThreadId, myThreadId)
-import           Control.Concurrent.Async      (Async, async, asyncThreadId, asyncWithUnmask)
+import           Control.Concurrent.Async      (Async, async, asyncThreadId, asyncWithUnmask, cancel)
 import           Control.Concurrent.STM.TMVar  (TMVar, newEmptyTMVarIO,
                                                 putTMVar, takeTMVar)
 import           Control.Concurrent.STM.TQueue (TQueue, readTQueue, writeTQueue)
 import           Control.Exception.Safe        (SomeException, bracket,
                                                 catchAsync, isSyncException,
                                                 mask_, uninterruptibleMask_)
+import           Control.Monad                 (void)
 import           Control.Monad.STM             (atomically)
 import           Data.Default
 import           Data.Foldable                 (for_, traverse_)
+import           Data.Functor                  (($>))
 import           Data.IORef                    (IORef, modifyIORef', newIORef,
                                                 readIORef, writeIORef)
-import           Data.Map.Strict               (Map, delete, empty, insert,
+import           Data.Map.Strict               (Map, delete, elems, empty, insert,
                                                 keys, lookup)
+import           System.Clock                  (Clock (Monotonic),
+                                                TimeSpec (..), diffTimeSpec,
+                                                getTime)
 import           System.Timeout                (timeout)
+
+import           Data.DelayedQueue             (DelayedQueue,
+                                                newEmptyDelayedQueue, pop, push)
 
 {-
     Basic message queue and state machine behavior.
@@ -140,3 +150,157 @@ newProcess procMap procSpec@(ProcessSpec monitors _ action) = mask_ $ do
         in (unmask action *> notify Normal monitors) `catchAsync` \e -> notify (toReason e) monitors
     modifyIORef' procMap $ insert (asyncThreadId a) (a, procSpec)
     pure a
+
+{-
+    Restart intensity handling.
+-}
+newtype RestartPeriod = RestartPeriod TimeSpec
+
+instance Default RestartPeriod where
+    def = RestartPeriod TimeSpec { sec = 5, nsec = 0 }
+
+newtype RestartIntensity = RestartIntensity Int
+
+instance Default RestartIntensity where
+    def = RestartIntensity 1
+
+newtype RestartHist = RestartHist (DelayedQueue TimeSpec) deriving (Eq, Show)
+
+newRestartHist :: RestartIntensity -> RestartHist
+newRestartHist (RestartIntensity maxR) = RestartHist $ newEmptyDelayedQueue maxR
+
+getCurrentTime :: IO TimeSpec
+getCurrentTime = getTime Monotonic
+
+isRestartIntense :: RestartPeriod -> TimeSpec -> RestartHist -> (Bool, RestartHist)
+isRestartIntense (RestartPeriod maxT) lastRestart (RestartHist dq) =
+    let histWithLastRestart = push lastRestart dq
+    in case pop histWithLastRestart of
+        Nothing                         ->  (False, RestartHist histWithLastRestart)
+        Just (oldestRestart, nextHist)    ->  (lastRestart - oldestRestart <= maxT, RestartHist nextHist)
+
+isRestartIntenseNow :: RestartPeriod -> RestartHist -> IO (Bool, RestartHist)
+isRestartIntenseNow maxT restartHist = do
+    currentTime <- getCurrentTime
+    pure $ isRestartIntense maxT currentTime restartHist
+
+{-
+    Supervisor
+-}
+data SupervisorCommand
+    = Down ExitReason ThreadId
+    | StartChild ProcessSpec (TMVar (Async ()))
+
+type SupervisorQueue = TQueue SupervisorCommand
+
+-- newSupervisorQueue :: IO SupervisorQueue
+-- newSupervisorQueue = newTQueueIO
+
+newSupervisedProcess
+    :: SupervisorQueue  -- ^ Inbox message queue of the supervisor.
+    -> ProcessMap       -- ^ Map of current live processes which the supervisor monitors.
+    -> ProcessSpec      -- ^ Specification of the process to be started.
+    -> IO (Async ())
+newSupervisedProcess inbox procMap procSpec =
+    newProcess procMap $ addMonitor monitor procSpec
+      where
+        monitor reason tid = atomically $ writeTQueue inbox (Down reason tid)
+
+startAllSupervisedProcess
+    :: SupervisorQueue  -- ^ Inbox message queue of the supervisor.
+    -> ProcessMap       -- ^ Map of current live processes which the supervisor monitors.
+    -> [ProcessSpec]    -- ^ List of process specifications to be started.
+    -> IO ()
+startAllSupervisedProcess inbox procMap = traverse_ $ newSupervisedProcess inbox procMap
+
+killAllSupervisedProcess :: SupervisorQueue -> ProcessMap -> IO ()
+killAllSupervisedProcess inbox procMap = uninterruptibleMask_ $ do
+    pmap <- readIORef procMap
+    for_ (elems pmap) $ cancel . fst
+    go pmap
+      where
+        go pmap | null pmap = writeIORef procMap pmap
+                | otherwise = do
+                    cmd <- atomically $ readTQueue inbox
+                    case cmd of
+                        (Down _ tid) -> go $! delete tid pmap
+                        _            -> go pmap
+
+data Strategy = OneForOne | OneForAll
+
+newSimpleOneForOneSupervisor :: SupervisorQueue -> IO ()
+newSimpleOneForOneSupervisor inbox = newSupervisor inbox OneForOne def def []
+
+newSupervisor
+    :: SupervisorQueue  -- ^ Inbox message queue of the supervisor.
+    -> Strategy         -- ^ Restarting strategy of monitored processes.
+    -> RestartIntensity -- ^ Maximum restart intensity of the process.  Used with the next argument.
+                        --   If proccess crashed more than this value within given period, the supervisor will restart itself.
+    -> RestartPeriod    -- ^ Period of restart intensity window.  If intense crash happened within this period,
+                        --   the supervisor will restart itself.
+    -> [ProcessSpec]    -- ^ List of supervised process specifications.
+    -> IO ()
+newSupervisor inbox strategy maxR maxT procSpecs =
+    bracket newProcessMap (killAllSupervisedProcess inbox) initSupervisor
+      where
+        initSupervisor procMap = do
+            startAllSupervisedProcess inbox procMap procSpecs
+            supervisorLoop inbox (restartChild strategy procMap) maxR isIntense procMap procSpecs
+
+        restartChild OneForOne pmap spec = void $ newSupervisedProcess inbox pmap spec
+        restartChild OneForAll pmap _    = killAllSupervisedProcess inbox pmap *> startAllSupervisedProcess inbox pmap procSpecs
+
+        isIntense = isRestartIntenseNow maxT
+
+supervisorLoop
+    :: SupervisorQueue                          -- ^ Inbox message queue of the supervisor.
+    -> (ProcessSpec -> IO ())                   -- ^ Function to perform process restart.
+    -> RestartIntensity                         -- ^ Maximum restart intensity of the process.  Used with the next argument.
+                                                --   If process crashed more than this value within given period,
+                                                --   the supervisor will restart itself.
+    -> (RestartHist -> IO (Bool, RestartHist))  -- ^ Check if SV restart is needed and update restart history.
+    -> ProcessMap                               -- ^ Map of current live processes which the supervisor monitors.
+    -> [ProcessSpec]                            -- ^ List of supervised process specifications.
+    -> IO ()
+supervisorLoop inbox restartChild maxR isIntense procMap procSpecs = go (Just $ newRestartHist maxR)
+  where
+    go :: Maybe RestartHist -> IO ()
+    go (Just hist) =do
+        next <- mask_ $ do
+            cmd <- atomically (readTQueue inbox)
+            processSupervisorCommand hist cmd
+        go next
+    go Nothing = pure ()
+
+    processSupervisorCommand :: RestartHist -> SupervisorCommand -> IO (Maybe RestartHist)
+    processSupervisorCommand hist (Down reason tid) = do
+        pmap <- readIORef procMap
+        processRestart $ snd <$> lookup tid pmap
+      where
+        processRestart :: Maybe ProcessSpec -> IO (Maybe RestartHist)
+        processRestart (Just (procSpec@(ProcessSpec _ restart _))) = do
+            modifyIORef' procMap $ delete tid
+            if restartNeeded restart reason
+            then do
+                (intense, nextHist) <- isIntense hist
+                if intense
+                then pure Nothing
+                else restartChild procSpec $> Just nextHist
+            else
+                pure (Just hist)
+        processRestart Nothing = pure $ Just hist
+
+        restartNeeded Temporary _      = False
+        restartNeeded Transient Normal = False
+        restartNeeded _         _      = True
+
+    processSupervisorCommand hist (StartChild (ProcessSpec monitors _ proc) callRet) = do
+        a <- newSupervisedProcess inbox procMap (ProcessSpec monitors Temporary proc)
+        atomically $ putTMVar callRet a
+        pure (Just hist)
+
+newChild :: CallTimeout -> SupervisorQueue -> ProcessSpec -> IO (Maybe (Async ()))
+newChild (CallTimeout usec) sv spec = do
+    r <- newEmptyTMVarIO
+    atomically . writeTQueue sv $ StartChild spec r
+    timeout usec . atomically . takeTMVar $ r

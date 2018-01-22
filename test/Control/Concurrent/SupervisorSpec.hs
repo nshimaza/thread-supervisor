@@ -1,11 +1,14 @@
 module Control.Concurrent.SupervisorSpec where
 
-import           Control.Concurrent.Async      (asyncThreadId, cancel, withAsync)
+import           Control.Concurrent            (threadDelay)
+import           Control.Concurrent.Async      (async, asyncThreadId, cancel, withAsync)
 import           Control.Concurrent.MVar       (isEmptyMVar, newEmptyMVar,
                                                 putMVar, readMVar, takeMVar)
 import           Control.Concurrent.STM.TQueue (newTQueueIO, readTQueue,
                                                 tryReadTQueue, writeTQueue)
-import           Control.Exception.Safe        (throwString)
+import           Control.Concurrent.STM.TVar   (newTVarIO, readTVarIO,
+                                                writeTVar)
+import           Control.Exception.Safe        (bracket, throwString)
 import           Control.Monad.STM             (atomically)
 import           Data.Default                  (def)
 import           Data.Foldable                 (for_)
@@ -196,3 +199,102 @@ spec = do
             for_ svs $ \sv -> do
                 report <- atomically $ readTQueue sv
                 report `shouldBe` (Killed, asyncThreadId a)
+
+    describe "SimpleOneForOneSupervisor" $ do
+        it "it spown a child based on given ProcessSpec" $ do
+            pmap <- newProcessMap
+            trigger <- newEmptyMVar
+            mark <- newEmptyMVar
+            blocker <- newEmptyMVar
+            var <- newTVarIO (0 :: Int)
+            sv <- newTQueueIO
+            withAsync (newSimpleOneForOneSupervisor sv) $ \_ -> do
+                maybeChildAsync <- newChild def sv $ newProcessSpec [] Temporary $ do
+                    readMVar trigger
+                    atomically $ writeTVar var 1
+                    putMVar mark ()
+                    readMVar blocker
+                    pure ()
+                isJust maybeChildAsync `shouldBe` True
+                currentVal0 <- readTVarIO var
+                currentVal0 `shouldBe` 0
+                putMVar trigger ()
+                readMVar mark
+                currentVal1 <- readTVarIO var
+                currentVal1 `shouldBe` 1
+
+        it "does not restart finished process regardless restart type" $ do
+            sv <- newTQueueIO
+            withAsync (newSimpleOneForOneSupervisor sv) $ \_ -> for_ [Permanent, Transient, Temporary] $ \restart -> do
+                mark <- newEmptyMVar
+                trigger <- newEmptyMVar
+                maybeChildAsync <- newChild def sv $ newProcessSpec [] restart $ do
+                    putMVar mark ()
+                    readMVar trigger
+                    pure ()
+                takeMVar mark
+                putMVar trigger ()
+                threadDelay (20 * 10^3)
+                r <- isEmptyMVar mark
+                r `shouldBe` True
+
+        it "does not restart itself by multiple child crash" $ do
+            pmap <- newProcessMap
+            sv <- newTQueueIO
+            svMon <- newEmptyMVar
+            let monitor reason tid  = putMVar svMon (reason, tid)
+            bracket
+                (newProcess pmap $ newProcessSpec [monitor] Temporary $ newSimpleOneForOneSupervisor sv)
+                cancel
+                $ \_ -> do
+                    blocker <- newEmptyMVar
+                    for_ [1..10] $ \_ -> do
+                        Just a <- newChild def sv $ newProcessSpec [] Permanent $ readMVar blocker $> ()
+                        cancel a
+                    threadDelay (20 * 10^3)
+                    r <- isEmptyMVar svMon
+                    r `shouldBe` True
+
+        it "kills all children when it is killed" $ do
+            rs <- for [1..10] $ \n -> do
+                childQ <- newTQueueIO
+                childMon <- newEmptyMVar
+                let monitor reason tid  = putMVar childMon (reason, tid)
+                    proc                = newProcessSpec [monitor] Temporary $ simpleCountingServer childQ n $> ()
+                pure (childQ, childMon, proc)
+            let (childQs, childMons, procs) = unzip3 rs
+            sv <- newTQueueIO
+            withAsync (newSimpleOneForOneSupervisor sv) $ \_ -> do
+                for_ procs $ newChild def sv
+                rs <- for childQs $ \ch -> call def ch True
+                rs `shouldBe` map Just [1..10]
+            reports <- for childMons takeMVar
+            let isDown (Killed, _)  = True
+                isDown _            = False
+            reports `shouldSatisfy` and . map isDown
+
+        it "can be killed when children is finishing at the same time" $ do
+            let volume          = 1000
+            rs <- for [1..volume] $ \n -> do
+                childQ <- newTQueueIO
+                childMon <- newEmptyMVar
+                let monitor reason tid  = putMVar childMon (reason, tid)
+                    proc                = newProcessSpec [monitor] Temporary $ simpleCountingServer childQ n $> ()
+                pure (childQ, childMon, proc)
+            let (childQs, childMons, procs) = unzip3 rs
+            sv <- newTQueueIO
+            withAsync (newSimpleOneForOneSupervisor sv) $ \_ -> do
+                for_ procs $ newChild def sv
+                rs <- for childQs $ \ch -> call def ch True
+                rs `shouldBe` map Just [1..volume]
+                async $ for_ childQs $ \ch -> threadDelay 1 *> cast ch False
+                threadDelay 10000
+            reports <- for childMons takeMVar
+            length reports `shouldBe` volume
+            let isNormal (Normal, _)    = True
+                isNormal _              = False
+                isKilled (Killed, _)    = True
+                isKilled _              = False
+            reports `shouldSatisfy` (/=) 0 . length . filter isNormal
+            reports `shouldSatisfy` (/=) 0 . length . filter isKilled
+            (length . filter isNormal) reports + (length . filter isKilled) reports `shouldBe` volume
