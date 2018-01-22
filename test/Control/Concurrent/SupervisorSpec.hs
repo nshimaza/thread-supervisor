@@ -1,6 +1,6 @@
 module Control.Concurrent.SupervisorSpec where
 
-import           Control.Concurrent            (threadDelay)
+import           Control.Concurrent            (ThreadId, killThread, myThreadId, threadDelay)
 import           Control.Concurrent.Async      (async, asyncThreadId, cancel, withAsync)
 import           Control.Concurrent.MVar       (isEmptyMVar, newEmptyMVar,
                                                 putMVar, readMVar, takeMVar)
@@ -13,6 +13,7 @@ import           Control.Monad.STM             (atomically)
 import           Data.Default                  (def)
 import           Data.Foldable                 (for_)
 import           Data.Functor                  (($>))
+import           Data.List                     (unzip4)
 import           Data.Maybe                    (fromJust, isJust, isNothing)
 import           Data.Traversable              (for)
 
@@ -298,3 +299,109 @@ spec = do
             reports `shouldSatisfy` (/=) 0 . length . filter isNormal
             reports `shouldSatisfy` (/=) 0 . length . filter isKilled
             (length . filter isNormal) reports + (length . filter isKilled) reports `shouldBe` volume
+
+    describe "Supervisor with one-for-one strategy" $ do
+        it "automatically start children based on given ProcessSpec list" $ do
+            rs <- for [1,2,3] $ \n -> do
+                childQ <- newTQueueIO
+                childMon <- newEmptyMVar
+                let monitor reason tid  = putMVar childMon (reason, tid)
+                    proc                = newProcessSpec [monitor] Permanent $ simpleCountingServer childQ n $> ()
+                pure (childQ, childMon, proc)
+            let (childQs, childMons, procs) = unzip3 rs
+            sv <- newTQueueIO
+            withAsync (newSupervisor sv OneForOne def def procs) $ \_ -> do
+                rs1 <- for childQs $ \ch -> call def ch True
+                rs1 `shouldBe` map Just [1,2,3]
+                rs2 <- for childQs $ \ch -> call def ch True
+                rs2 `shouldBe` map Just [2,3,4]
+
+        it "automatically restart finished children with permanent restart type" $ do
+            rs <- for [1,2,3] $ \n -> do
+                childQ <- newTQueueIO
+                childMon <- newEmptyMVar
+                let monitor reason tid  = putMVar childMon (reason, tid)
+                    proc                = newProcessSpec [monitor] Permanent $ simpleCountingServer childQ n $> ()
+                pure (childQ, childMon, proc)
+            let (childQs, childMons, procs) = unzip3 rs
+            sv <- newTQueueIO
+            withAsync (newSupervisor sv OneForOne (RestartIntensity 3) def procs) $ \_ -> do
+                rs1 <- for childQs $ \ch -> call def ch True
+                rs1 `shouldBe` map Just [1,2,3]
+                rs2 <- for childQs $ \ch -> call def ch True
+                rs2 `shouldBe` map Just [2,3,4]
+                for_ childQs $ \ch -> cast ch False
+                reports <- for childMons takeMVar
+                let isDownNormal (Normal, _)    = True
+                    isDownNormal _              = False
+                reports `shouldSatisfy` and . map isDownNormal
+                rs3 <- for childQs $ \ch -> call def ch True
+                rs3 `shouldBe` map Just [1,2,3]
+                rs4 <- for childQs $ \ch -> call def ch True
+                rs4 `shouldBe` map Just [2,3,4]
+
+        it "restart neither normally finished transient nor temporary child" $ do
+            rs <- for [Transient, Temporary] $ \restart -> do
+                marker <- newEmptyMVar
+                trigger <- newEmptyMVar
+                childMon <- newEmptyMVar
+                let monitor reason tid  = putMVar childMon (reason, tid)
+                    proc                = newProcessSpec [monitor] restart $ putMVar marker () *> takeMVar trigger $> ()
+                pure (marker, trigger, childMon, proc)
+            let (markers, triggers, childMons, procs) = unzip4 rs
+            sv <- newTQueueIO
+            withAsync (newSupervisor sv OneForOne (RestartIntensity 2) def procs) $ \_ -> do
+                rs1 <- for markers $ \m -> takeMVar m
+                rs1 `shouldBe` [(), ()]
+                for_ triggers $ \t -> putMVar t ()
+                reports <- for childMons takeMVar
+                let isDownNormal (Normal, _)    = True
+                    isDownNormal _              = False
+                reports `shouldSatisfy` and . map isDownNormal
+                threadDelay 10000
+                rs <- for markers $  \m -> isEmptyMVar m
+                rs `shouldBe` [True, True]
+
+        it "restart crashed transient child but does not restart crashed temporary child" $ do
+            rs <- for [Transient, Temporary] $ \restart -> do
+                marker <- newEmptyMVar
+                trigger <- newEmptyMVar
+                childMon <- newEmptyMVar
+                let monitor reason tid  = putMVar childMon (reason, tid)
+                    proc                = newProcessSpec [monitor] restart $ putMVar marker () *> readMVar trigger *> throwString "oops" $> ()
+                pure (marker, trigger, childMon, proc)
+            let (markers, triggers, childMons, procs) = unzip4 rs
+            sv <- newTQueueIO
+            withAsync (newSupervisor sv OneForOne (RestartIntensity 2) def procs) $ \_ -> do
+                rs1 <- for markers $ \m -> takeMVar m
+                rs1 `shouldBe` [(), ()]
+                for_ triggers $ \t -> putMVar t ()
+                reports <- for childMons takeMVar
+                let isDownUncaughtException (UncaughtException, _)  = True
+                    isDownUncaughtException _                       = False
+                reports `shouldSatisfy` and . map isDownUncaughtException
+                threadDelay 10000
+                rs <- for markers $  \m -> isEmptyMVar m
+                rs `shouldBe` [False, True]
+
+        it "restart killed transient child but does not restart killed temporary child" $ do
+            blocker <- newEmptyMVar
+            rs <- for [Transient, Temporary] $ \restart -> do
+                marker <- newEmptyMVar
+                childMon <- newEmptyMVar
+                let monitor reason tid  = putMVar childMon (reason, tid)
+                    proc                = newProcessSpec [monitor] restart $ (myThreadId >>= putMVar marker) *> readMVar blocker $> ()
+                pure (marker, childMon, proc)
+            let (markers, childMons, procs) = unzip3 rs
+            sv <- newTQueueIO
+            withAsync (newSupervisor sv OneForOne (RestartIntensity 2) def procs) $ \_ -> do
+                rs1 <- for markers $ \m -> takeMVar m
+                length rs1 `shouldBe` 2
+                for_ rs1 killThread
+                reports <- for childMons takeMVar
+                let isDownKilled (Killed, _)    = True
+                    isDownKilled _              = False
+                reports `shouldSatisfy` and . map isDownKilled
+                threadDelay 10000
+                rs <- for markers $  \m -> isEmptyMVar m
+                rs `shouldBe` [False, True]

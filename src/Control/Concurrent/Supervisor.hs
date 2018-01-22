@@ -20,6 +20,7 @@ module Control.Concurrent.Supervisor
     , newProcess
     , RestartIntensity (..)
     , RestartPeriod (..)
+    , Strategy (..)
     , newSupervisor
     , newSimpleOneForOneSupervisor
     , newChild
