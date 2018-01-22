@@ -1,7 +1,9 @@
 module Control.Concurrent.SupervisorSpec where
 
-import           Control.Concurrent            (ThreadId, killThread, myThreadId, threadDelay)
-import           Control.Concurrent.Async      (async, asyncThreadId, cancel, withAsync)
+import           Control.Concurrent            (ThreadId, killThread,
+                                                myThreadId, threadDelay)
+import           Control.Concurrent.Async      (async, asyncThreadId, cancel,
+                                                withAsync)
 import           Control.Concurrent.MVar       (isEmptyMVar, newEmptyMVar,
                                                 putMVar, readMVar, takeMVar)
 import           Control.Concurrent.STM.TQueue (newTQueueIO, readTQueue,
@@ -75,8 +77,8 @@ spec = do
             srvQ <- newTQueueIO
             let initializer         = pure (1, 2)
                 cleanup _           = pure ()
-                handler s AskFst    = pure (fst s, Right s)
-                handler s AskSnd    = pure (snd s, Right s)
+                handler s AskFst = pure (fst s, Right s)
+                handler s AskSnd = pure (snd s, Right s)
                 srv                     = newServer srvQ initializer cleanup handler
             withAsync srv $ \_ -> do
                 r1 <- call def srvQ AskFst
@@ -270,8 +272,8 @@ spec = do
                 rs <- for childQs $ \ch -> call def ch True
                 rs `shouldBe` map Just [1..10]
             reports <- for childMons takeMVar
-            let isDown (Killed, _)  = True
-                isDown _            = False
+            let isDown (Killed, _) = True
+                isDown _           = False
             reports `shouldSatisfy` and . map isDown
 
         it "can be killed when children is finishing at the same time" $ do
@@ -292,10 +294,10 @@ spec = do
                 threadDelay 10000
             reports <- for childMons takeMVar
             length reports `shouldBe` volume
-            let isNormal (Normal, _)    = True
-                isNormal _              = False
-                isKilled (Killed, _)    = True
-                isKilled _              = False
+            let isNormal (Normal, _) = True
+                isNormal _           = False
+                isKilled (Killed, _) = True
+                isKilled _           = False
             reports `shouldSatisfy` (/=) 0 . length . filter isNormal
             reports `shouldSatisfy` (/=) 0 . length . filter isKilled
             (length . filter isNormal) reports + (length . filter isKilled) reports `shouldBe` volume
@@ -332,8 +334,8 @@ spec = do
                 rs2 `shouldBe` map Just [2,3,4]
                 for_ childQs $ \ch -> cast ch False
                 reports <- for childMons takeMVar
-                let isDownNormal (Normal, _)    = True
-                    isDownNormal _              = False
+                let isDownNormal (Normal, _) = True
+                    isDownNormal _           = False
                 reports `shouldSatisfy` and . map isDownNormal
                 rs3 <- for childQs $ \ch -> call def ch True
                 rs3 `shouldBe` map Just [1,2,3]
@@ -355,8 +357,8 @@ spec = do
                 rs1 `shouldBe` [(), ()]
                 for_ triggers $ \t -> putMVar t ()
                 reports <- for childMons takeMVar
-                let isDownNormal (Normal, _)    = True
-                    isDownNormal _              = False
+                let isDownNormal (Normal, _) = True
+                    isDownNormal _           = False
                 reports `shouldSatisfy` and . map isDownNormal
                 threadDelay 10000
                 rs <- for markers $  \m -> isEmptyMVar m
@@ -377,8 +379,8 @@ spec = do
                 rs1 `shouldBe` [(), ()]
                 for_ triggers $ \t -> putMVar t ()
                 reports <- for childMons takeMVar
-                let isDownUncaughtException (UncaughtException, _)  = True
-                    isDownUncaughtException _                       = False
+                let isDownUncaughtException (UncaughtException, _) = True
+                    isDownUncaughtException _                      = False
                 reports `shouldSatisfy` and . map isDownUncaughtException
                 threadDelay 10000
                 rs <- for markers $  \m -> isEmptyMVar m
@@ -399,8 +401,8 @@ spec = do
                 length rs1 `shouldBe` 2
                 for_ rs1 killThread
                 reports <- for childMons takeMVar
-                let isDownKilled (Killed, _)    = True
-                    isDownKilled _              = False
+                let isDownKilled (Killed, _) = True
+                    isDownKilled _           = False
                 reports `shouldSatisfy` and . map isDownKilled
                 threadDelay 10000
                 rs <- for markers $  \m -> isEmptyMVar m

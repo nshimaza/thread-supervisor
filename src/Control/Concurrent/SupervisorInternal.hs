@@ -3,7 +3,8 @@ module Control.Concurrent.SupervisorInternal where
 import           Prelude                       hiding (lookup)
 
 import           Control.Concurrent            (ThreadId, myThreadId)
-import           Control.Concurrent.Async      (Async, async, asyncThreadId, asyncWithUnmask, cancel)
+import           Control.Concurrent.Async      (Async, async, asyncThreadId,
+                                                asyncWithUnmask, cancel)
 import           Control.Concurrent.STM.TMVar  (TMVar, newEmptyTMVarIO,
                                                 putTMVar, takeTMVar)
 import           Control.Concurrent.STM.TQueue (TQueue, readTQueue, writeTQueue)
@@ -17,8 +18,8 @@ import           Data.Foldable                 (for_, traverse_)
 import           Data.Functor                  (($>))
 import           Data.IORef                    (IORef, modifyIORef', newIORef,
                                                 readIORef, writeIORef)
-import           Data.Map.Strict               (Map, delete, elems, empty, insert,
-                                                keys, lookup)
+import           Data.Map.Strict               (Map, delete, elems, empty,
+                                                insert, keys, lookup)
 import           System.Clock                  (Clock (Monotonic),
                                                 TimeSpec (..), diffTimeSpec,
                                                 getTime)

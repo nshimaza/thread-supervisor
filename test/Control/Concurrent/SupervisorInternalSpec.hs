@@ -1,7 +1,8 @@
 module Control.Concurrent.SupervisorInternalSpec where
 
-import           Data.Default                  (def)
-import           System.Clock                  (TimeSpec (..), fromNanoSecs)
+import           Data.Default                          (def)
+import           System.Clock                          (TimeSpec (..),
+                                                        fromNanoSecs)
 
 import           Test.Hspec
 
