@@ -1,7 +1,7 @@
 name:                async-supervisor
-version:             0.1.0.0
+version:             0.0.1.0
 github:              "nshimaza/async-supervisor"
-license:             BSD3
+license:             MIT
 author:              "Naoto Shimazaki"
 maintainer:          "Naoto.Shimazaki@gmail.com"
 copyright:           "2018 Naoto Shimazaki"
