@@ -256,8 +256,8 @@ spec = do
                     threadDelay 1000
                     r <- isEmptyMVar svMon
                     r `shouldBe` True
-                    maybeAsync <- ewChild def sv $ newProcessSpec [] Permanent $ readMVar blocker $> ()
-                    maybeAsync `shouldSatisfy` isJust
+                    maybeAsync <- newChild def sv $ newProcessSpec [] Permanent $ readMVar blocker $> ()
+                    isJust maybeAsync `shouldBe` True
 
         it "kills all children when it is killed" $ do
             rs <- for [1..10] $ \n -> do
