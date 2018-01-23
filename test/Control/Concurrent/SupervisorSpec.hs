@@ -240,7 +240,7 @@ spec = do
                 r <- isEmptyMVar mark
                 r `shouldBe` True
 
-        it "does not restart itself by multiple child crash" $ do
+        it "does not exit itself by massive child crash" $ do
             pmap <- newProcessMap
             sv <- newTQueueIO
             svMon <- newEmptyMVar
@@ -256,6 +256,8 @@ spec = do
                     threadDelay 1000
                     r <- isEmptyMVar svMon
                     r `shouldBe` True
+                    maybeAsync <- ewChild def sv $ newProcessSpec [] Permanent $ readMVar blocker $> ()
+                    maybeAsync `shouldSatisfy` isJust
 
         it "kills all children when it is killed" $ do
             rs <- for [1..10] $ \n -> do
