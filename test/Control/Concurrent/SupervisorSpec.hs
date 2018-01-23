@@ -3,7 +3,7 @@ module Control.Concurrent.SupervisorSpec where
 import           Control.Concurrent            (ThreadId, killThread,
                                                 myThreadId, threadDelay)
 import           Control.Concurrent.Async      (async, asyncThreadId, cancel,
-                                                withAsync)
+                                                wait, withAsync)
 import           Control.Concurrent.MVar       (isEmptyMVar, newEmptyMVar,
                                                 putMVar, readMVar, takeMVar)
 import           Control.Concurrent.STM.TQueue (newTQueueIO, readTQueue,
@@ -117,7 +117,6 @@ spec = do
             withAsync srv $ \_ -> do
                 r1 <- call (CallTimeout 10000) srvQ ()
                 (r1 :: Maybe ()) `shouldBe` Nothing
-
     describe "Process" $ do
         it "reports exit code Normal on normal exit" $ do
             trigger <- newEmptyMVar
@@ -205,7 +204,6 @@ spec = do
 
     describe "SimpleOneForOneSupervisor" $ do
         it "it spown a child based on given ProcessSpec" $ do
-            pmap <- newProcessMap
             trigger <- newEmptyMVar
             mark <- newEmptyMVar
             blocker <- newEmptyMVar
@@ -231,13 +229,14 @@ spec = do
             withAsync (newSimpleOneForOneSupervisor sv) $ \_ -> for_ [Permanent, Transient, Temporary] $ \restart -> do
                 mark <- newEmptyMVar
                 trigger <- newEmptyMVar
-                maybeChildAsync <- newChild def sv $ newProcessSpec [] restart $ do
+                Just a <- newChild def sv $ newProcessSpec [] restart $ do
                     putMVar mark ()
                     readMVar trigger
                     pure ()
                 takeMVar mark
                 putMVar trigger ()
-                threadDelay (20 * 10^3)
+                wait a
+                threadDelay 1000
                 r <- isEmptyMVar mark
                 r `shouldBe` True
 
@@ -254,7 +253,7 @@ spec = do
                     for_ [1..10] $ \_ -> do
                         Just a <- newChild def sv $ newProcessSpec [] Permanent $ readMVar blocker $> ()
                         cancel a
-                    threadDelay (20 * 10^3)
+                    threadDelay 1000
                     r <- isEmptyMVar svMon
                     r `shouldBe` True
 
@@ -360,7 +359,7 @@ spec = do
                 let isDownNormal (Normal, _) = True
                     isDownNormal _           = False
                 reports `shouldSatisfy` and . map isDownNormal
-                threadDelay 10000
+                threadDelay 1000
                 rs <- for markers $  \m -> isEmptyMVar m
                 rs `shouldBe` [True, True]
 
@@ -370,7 +369,7 @@ spec = do
                 trigger <- newEmptyMVar
                 childMon <- newEmptyMVar
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    proc                = newProcessSpec [monitor] restart $ putMVar marker () *> readMVar trigger *> throwString "oops" $> ()
+                    proc                = newProcessSpec [monitor] restart $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, proc)
             let (markers, triggers, childMons, procs) = unzip4 rs
             sv <- newTQueueIO
@@ -382,7 +381,7 @@ spec = do
                 let isDownUncaughtException (UncaughtException, _) = True
                     isDownUncaughtException _                      = False
                 reports `shouldSatisfy` and . map isDownUncaughtException
-                threadDelay 10000
+                threadDelay 1000
                 rs <- for markers $  \m -> isEmptyMVar m
                 rs `shouldBe` [False, True]
 
@@ -392,7 +391,7 @@ spec = do
                 marker <- newEmptyMVar
                 childMon <- newEmptyMVar
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    proc                = newProcessSpec [monitor] restart $ (myThreadId >>= putMVar marker) *> readMVar blocker $> ()
+                    proc                = newProcessSpec [monitor] restart $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
                 pure (marker, childMon, proc)
             let (markers, childMons, procs) = unzip3 rs
             sv <- newTQueueIO
@@ -404,6 +403,6 @@ spec = do
                 let isDownKilled (Killed, _) = True
                     isDownKilled _           = False
                 reports `shouldSatisfy` and . map isDownKilled
-                threadDelay 10000
+                threadDelay 1000
                 rs <- for markers $  \m -> isEmptyMVar m
                 rs `shouldBe` [False, True]
