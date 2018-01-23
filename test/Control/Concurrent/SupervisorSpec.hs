@@ -203,7 +203,7 @@ spec = do
                 report `shouldBe` (Killed, asyncThreadId a)
 
     describe "SimpleOneForOneSupervisor" $ do
-        it "it spown a child based on given ProcessSpec" $ do
+        it "it starts a dynamic child" $ do
             trigger <- newEmptyMVar
             mark <- newEmptyMVar
             blocker <- newEmptyMVar
@@ -224,7 +224,7 @@ spec = do
                 currentVal1 <- readTVarIO var
                 currentVal1 `shouldBe` 1
 
-        it "does not restart finished process regardless restart type" $ do
+        it "does not restart finished dynamic child regardless restart type" $ do
             sv <- newTQueueIO
             withAsync (newSimpleOneForOneSupervisor sv) $ \_ -> for_ [Permanent, Transient, Temporary] $ \restart -> do
                 mark <- newEmptyMVar
@@ -301,7 +301,7 @@ spec = do
             reports `shouldSatisfy` (/=) 0 . length . filter isKilled
             (length . filter isNormal) reports + (length . filter isKilled) reports `shouldBe` volume
 
-    describe "Supervisor with one-for-one strategy" $ do
+    describe "One-for-one Supervisor with static childlen" $ do
         it "automatically start children based on given ProcessSpec list" $ do
             rs <- for [1,2,3] $ \n -> do
                 childQ <- newTQueueIO
@@ -406,3 +406,45 @@ spec = do
                 threadDelay 1000
                 rs <- for markers $  \m -> isEmptyMVar m
                 rs `shouldBe` [False, True]
+
+        it "kills all children when it is killed" $ do
+            rs <- for [1..10] $ \n -> do
+                childQ <- newTQueueIO
+                childMon <- newEmptyMVar
+                let monitor reason tid  = putMVar childMon (reason, tid)
+                    proc                = newProcessSpec [monitor] Permanent $ simpleCountingServer childQ n $> ()
+                pure (childQ, childMon, proc)
+            let (childQs, childMons, procs) = unzip3 rs
+            sv <- newTQueueIO
+            withAsync (newSupervisor sv OneForOne def def procs) $ \_ -> do
+                rs <- for childQs $ \ch -> call def ch True
+                rs `shouldBe` map Just [1..10]
+            reports <- for childMons takeMVar
+            let isDown (Killed, _) = True
+                isDown _           = False
+            reports `shouldSatisfy` and . map isDown
+
+        it "can be killed when children is finishing at the same time" $ do
+            let volume          = 1000
+            rs <- for [1..volume] $ \n -> do
+                childQ <- newTQueueIO
+                childMon <- newTQueueIO
+                let monitor reason tid  = atomically $ writeTQueue childMon (reason, tid)
+                    proc                = newProcessSpec [monitor] Permanent $ simpleCountingServer childQ n $> ()
+                pure (childQ, childMon, proc)
+            let (childQs, childMons, procs) = unzip3 rs
+            sv <- newTQueueIO
+            withAsync (newSupervisor sv OneForOne (RestartIntensity 1000) def procs) $ \_ -> do
+                rs <- for childQs $ \ch -> call def ch True
+                rs `shouldBe` map Just [1..volume]
+                async $ for_ childQs $ \ch -> threadDelay 1 *> cast ch False
+                threadDelay 10000
+            reports <- for childMons $ atomically . readTQueue
+            length reports `shouldBe` volume
+            let isNormal (Normal, _) = True
+                isNormal _           = False
+                isKilled (Killed, _) = True
+                isKilled _           = False
+            reports `shouldSatisfy` (/=) 0 . length . filter isNormal
+            reports `shouldSatisfy` (/=) 0 . length . filter isKilled
+            (length . filter isNormal) reports + (length . filter isKilled) reports `shouldBe` volume
