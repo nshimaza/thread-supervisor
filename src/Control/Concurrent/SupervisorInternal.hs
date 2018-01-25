@@ -155,32 +155,40 @@ newProcess procMap procSpec@(ProcessSpec monitors _ action) = mask_ $ do
 {-
     Restart intensity handling.
 -}
-newtype RestartPeriod = RestartPeriod TimeSpec
+data RestartSensitivity = RestartSensitivity
+    { restartSensitivityIntensity   :: Int
+    , restartSensitivityPeriod      :: TimeSpec
+    }
 
-instance Default RestartPeriod where
-    def = RestartPeriod TimeSpec { sec = 5, nsec = 0 }
+instance Default RestartSensitivity where
+    def = RestartSensitivity 1 TimeSpec { sec = 5, nsec = 0 }
 
-newtype RestartIntensity = RestartIntensity Int
+-- newtype RestartPeriod = RestartPeriod TimeSpec
 
-instance Default RestartIntensity where
-    def = RestartIntensity 1
+-- instance Default RestartPeriod where
+--     def = RestartPeriod TimeSpec { sec = 5, nsec = 0 }
+
+-- newtype RestartIntensity = RestartIntensity Int
+
+-- instance Default RestartIntensity where
+--     def = RestartIntensity 1
 
 newtype RestartHist = RestartHist (DelayedQueue TimeSpec) deriving (Eq, Show)
 
-newRestartHist :: RestartIntensity -> RestartHist
-newRestartHist (RestartIntensity maxR) = RestartHist $ newEmptyDelayedQueue maxR
+newRestartHist :: Int -> RestartHist
+newRestartHist = RestartHist . newEmptyDelayedQueue
 
 getCurrentTime :: IO TimeSpec
 getCurrentTime = getTime Monotonic
 
-isRestartIntense :: RestartPeriod -> TimeSpec -> RestartHist -> (Bool, RestartHist)
-isRestartIntense (RestartPeriod maxT) lastRestart (RestartHist dq) =
+isRestartIntense :: TimeSpec -> TimeSpec -> RestartHist -> (Bool, RestartHist)
+isRestartIntense maxT lastRestart (RestartHist dq) =
     let histWithLastRestart = push lastRestart dq
     in case pop histWithLastRestart of
         Nothing                         ->  (False, RestartHist histWithLastRestart)
-        Just (oldestRestart, nextHist)    ->  (lastRestart - oldestRestart <= maxT, RestartHist nextHist)
+        Just (oldestRestart, nextHist)  ->  (lastRestart - oldestRestart <= maxT, RestartHist nextHist)
 
-isRestartIntenseNow :: RestartPeriod -> RestartHist -> IO (Bool, RestartHist)
+isRestartIntenseNow :: TimeSpec -> RestartHist -> IO (Bool, RestartHist)
 isRestartIntenseNow maxT restartHist = do
     currentTime <- getCurrentTime
     pure $ isRestartIntense maxT currentTime restartHist
@@ -230,18 +238,19 @@ killAllSupervisedProcess inbox procMap = uninterruptibleMask_ $ do
 data Strategy = OneForOne | OneForAll
 
 newSimpleOneForOneSupervisor :: SupervisorQueue -> IO ()
-newSimpleOneForOneSupervisor inbox = newSupervisor inbox OneForOne def def []
+newSimpleOneForOneSupervisor inbox = newSupervisor inbox OneForOne def []
 
 newSupervisor
-    :: SupervisorQueue  -- ^ Inbox message queue of the supervisor.
-    -> Strategy         -- ^ Restarting strategy of monitored processes.
-    -> RestartIntensity -- ^ Maximum restart intensity of the process.  Used with the next argument.
-                        --   If proccess crashed more than this value within given period, the supervisor will restart itself.
-    -> RestartPeriod    -- ^ Period of restart intensity window.  If intense crash happened within this period,
-                        --   the supervisor will restart itself.
-    -> [ProcessSpec]    -- ^ List of supervised process specifications.
+    :: SupervisorQueue      -- ^ Inbox message queue of the supervisor.
+    -> Strategy             -- ^ Restarting strategy of monitored processes.
+    -> RestartSensitivity   -- ^ Restart intensity sensitivity in restart count and period.
+    -- -> RestartIntensity -- ^ Maximum restart intensity of the process.  Used with the next argument.
+    --                     --   If proccess crashed more than this value within given period, the supervisor will restart itself.
+    -- -> RestartPeriod    -- ^ Period of restart intensity window.  If intense crash happened within this period,
+    --                     --   the supervisor will restart itself.
+    -> [ProcessSpec]        -- ^ List of supervised process specifications.
     -> IO ()
-newSupervisor inbox strategy maxR maxT procSpecs = bracket newProcessMap (killAllSupervisedProcess inbox) initSupervisor
+newSupervisor inbox strategy (RestartSensitivity maxR maxT) procSpecs = bracket newProcessMap (killAllSupervisedProcess inbox) initSupervisor
   where
     initSupervisor procMap = do
         startAllSupervisedProcess inbox procMap procSpecs

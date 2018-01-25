@@ -18,8 +18,7 @@ module Control.Concurrent.Supervisor
     , ProcessMap
     , newProcessMap
     , newProcess
-    , RestartIntensity (..)
-    , RestartPeriod (..)
+    , RestartSensitivity (..)
     , Strategy (..)
     , newSupervisor
     , newSimpleOneForOneSupervisor

@@ -312,7 +312,7 @@ spec = do
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             sv <- newTQueueIO
-            withAsync (newSupervisor sv OneForOne def def procs) $ \_ -> do
+            withAsync (newSupervisor sv OneForOne def procs) $ \_ -> do
                 rs1 <- for childQs $ \ch -> call def ch True
                 rs1 `shouldBe` map Just [1,2,3]
                 rs2 <- for childQs $ \ch -> call def ch True
@@ -327,7 +327,7 @@ spec = do
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             sv <- newTQueueIO
-            withAsync (newSupervisor sv OneForOne (RestartIntensity 3) def procs) $ \_ -> do
+            withAsync (newSupervisor sv OneForOne def { restartSensitivityIntensity = 3 } procs) $ \_ -> do
                 rs1 <- for childQs $ \ch -> call def ch True
                 rs1 `shouldBe` map Just [1,2,3]
                 rs2 <- for childQs $ \ch -> call def ch True
@@ -350,7 +350,7 @@ spec = do
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
             sv <- newTQueueIO
-            withAsync (newSupervisor sv OneForOne (RestartIntensity 2) def procs) $ \_ -> do
+            withAsync (newSupervisor sv OneForOne def { restartSensitivityIntensity = 2 } procs) $ \_ -> do
                 rs1 <- for markers $ \m -> takeMVar m
                 rs1 `shouldBe` [(), ()]
                 for_ triggers $ \t -> putMVar t ()
@@ -370,7 +370,7 @@ spec = do
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
             sv <- newTQueueIO
-            withAsync (newSupervisor sv OneForOne (RestartIntensity 2) def procs) $ \_ -> do
+            withAsync (newSupervisor sv OneForOne def { restartSensitivityIntensity = 2 } procs) $ \_ -> do
                 rs1 <- for markers $ \m -> takeMVar m
                 rs1 `shouldBe` [(), ()]
                 for_ triggers $ \t -> putMVar t ()
@@ -390,7 +390,7 @@ spec = do
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
             sv <- newTQueueIO
-            withAsync (newSupervisor sv OneForOne (RestartIntensity 2) def procs) $ \_ -> do
+            withAsync (newSupervisor sv OneForOne def { restartSensitivityIntensity = 2 } procs) $ \_ -> do
                 rs1 <- for markers $ \m -> takeMVar m
                 for_ rs1 killThread
                 reports <- for childMons takeMVar
@@ -408,7 +408,7 @@ spec = do
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             sv <- newTQueueIO
-            withAsync (newSupervisor sv OneForOne def def procs) $ \_ -> do
+            withAsync (newSupervisor sv OneForOne def procs) $ \_ -> do
                 rs <- for childQs $ \ch -> call def ch True
                 rs `shouldBe` map Just [1..10]
             reports <- for childMons takeMVar
@@ -424,7 +424,7 @@ spec = do
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             sv <- newTQueueIO
-            withAsync (newSupervisor sv OneForOne (RestartIntensity 1000) def procs) $ \_ -> do
+            withAsync (newSupervisor sv OneForOne def { restartSensitivityIntensity = 1000 } procs) $ \_ -> do
                 rs <- for childQs $ \ch -> call def ch True
                 rs `shouldBe` map Just [1..volume]
                 async $ for_ childQs $ \ch -> threadDelay 1 *> cast ch False
@@ -446,7 +446,7 @@ spec = do
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             sv <- newTQueueIO
-            a <- async $ newSupervisor sv OneForOne def def procs
+            a <- async $ newSupervisor sv OneForOne def procs
             pmap <- newProcessMap
             rs1 <- for childQs $ \ch -> call def ch True
             rs1 `shouldBe` map Just [1,2]
@@ -473,7 +473,7 @@ spec = do
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
             sv <- newTQueueIO
-            a <- async $ newSupervisor sv OneForOne def def procs
+            a <- async $ newSupervisor sv OneForOne def procs
             rs1 <- for markers $ \m -> takeMVar m
             rs1 `shouldBe` [(),()]
             putMVar (head triggers) ()
@@ -498,7 +498,7 @@ spec = do
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
             sv <- newTQueueIO
-            a <- async $ newSupervisor sv OneForOne def def procs
+            a <- async $ newSupervisor sv OneForOne def procs
             rs1 <- for markers $ \m -> takeMVar m
             killThread $ head rs1
             report1 <- takeMVar $ head childMons
@@ -522,7 +522,7 @@ spec = do
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             sv <- newTQueueIO
-            a <- async $ newSupervisor sv OneForOne def def procs
+            a <- async $ newSupervisor sv OneForOne def procs
             pmap <- newProcessMap
             rs1 <- for childQs $ \ch -> call def ch True
             rs1 `shouldBe` map Just [1..10]
@@ -545,7 +545,7 @@ spec = do
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
             sv <- newTQueueIO
-            a <- async $ newSupervisor sv OneForOne def def procs
+            a <- async $ newSupervisor sv OneForOne def procs
             rs1 <- for markers $ \m -> takeMVar m
             rs1 `shouldBe` [(),()]
             putMVar (head triggers) ()
@@ -570,7 +570,7 @@ spec = do
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
             sv <- newTQueueIO
-            a <- async $ newSupervisor sv OneForOne def def procs
+            a <- async $ newSupervisor sv OneForOne def procs
             rs1 <- for markers $ \m -> takeMVar m
             killThread $ head rs1
             report1 <- takeMVar $ head childMons
@@ -594,7 +594,7 @@ spec = do
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             sv <- newTQueueIO
-            a <- async $ newSupervisor sv OneForOne def def procs
+            a <- async $ newSupervisor sv OneForOne def procs
             pmap <- newProcessMap
             rs1 <- for childQs $ \ch -> call def ch True
             rs1 `shouldBe` map Just [1..10]
@@ -617,7 +617,7 @@ spec = do
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
             sv <- newTQueueIO
-            a <- async $ newSupervisor sv OneForOne def def procs
+            a <- async $ newSupervisor sv OneForOne def procs
             rs1 <- for markers $ \m -> takeMVar m
             rs1 `shouldBe` replicate 10 ()
             for_ triggers $ \t -> putMVar t ()
@@ -637,7 +637,7 @@ spec = do
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
             sv <- newTQueueIO
-            a <- async $ newSupervisor sv OneForOne def def procs
+            a <- async $ newSupervisor sv OneForOne def procs
             rs1 <- for markers $ \m -> takeMVar m
             for_ rs1 killThread
             reports <- for childMons takeMVar
@@ -656,7 +656,7 @@ spec = do
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             sv <- newTQueueIO
-            withAsync (newSupervisor sv OneForAll def def procs) $ \_ -> do
+            withAsync (newSupervisor sv OneForAll def procs) $ \_ -> do
                 rs1 <- for childQs $ \ch -> call def ch True
                 rs1 `shouldBe` map Just [1,2,3]
                 rs2 <- for childQs $ \ch -> call def ch True
@@ -671,7 +671,7 @@ spec = do
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             sv <- newTQueueIO
-            withAsync (newSupervisor sv OneForAll def def procs) $ \_ -> do
+            withAsync (newSupervisor sv OneForAll def procs) $ \_ -> do
                 rs1 <- for childQs $ \ch -> call def ch True
                 rs1 `shouldBe` map Just [1,2,3]
                 rs2 <- for childQs $ \ch -> call def ch True
@@ -694,7 +694,7 @@ spec = do
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
             sv <- newTQueueIO
-            withAsync (newSupervisor sv OneForAll (RestartIntensity 2) def procs) $ \_ -> do
+            withAsync (newSupervisor sv OneForAll def { restartSensitivityIntensity = 2 } procs) $ \_ -> do
                 rs1 <- for markers $ \m -> takeMVar m
                 rs1 `shouldBe` [(), ()]
                 putMVar (head triggers) ()
@@ -720,7 +720,7 @@ spec = do
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
             sv <- newTQueueIO
-            withAsync (newSupervisor sv OneForAll (RestartIntensity 2) def procs) $ \a -> do
+            withAsync (newSupervisor sv OneForAll def { restartSensitivityIntensity = 2 } procs) $ \a -> do
                 rs1 <- for markers $ \m -> takeMVar m
                 putMVar (head triggers) ()
                 reports <- for childMons takeMVar
@@ -745,7 +745,7 @@ spec = do
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
             sv <- newTQueueIO
-            withAsync (newSupervisor sv OneForAll def def procs) $ \_ -> do
+            withAsync (newSupervisor sv OneForAll def procs) $ \_ -> do
                 rs1 <- for markers $ \m -> takeMVar m
                 rs1 `shouldBe` [(),()]
                 putMVar (triggers !! 1) ()
@@ -766,7 +766,7 @@ spec = do
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
             sv <- newTQueueIO
-            withAsync (newSupervisor sv OneForAll def def procs) $ \_ -> do
+            withAsync (newSupervisor sv OneForAll def procs) $ \_ -> do
                 rs1 <- for markers $ \m -> takeMVar m
                 killThread $ rs1 !! 1
                 (reason, _) <- takeMVar $ childMons !! 1
@@ -784,7 +784,7 @@ spec = do
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             sv <- newTQueueIO
-            withAsync (newSupervisor sv OneForAll def def procs) $ \_ -> do
+            withAsync (newSupervisor sv OneForAll def procs) $ \_ -> do
                 rs <- for childQs $ \ch -> call def ch True
                 rs `shouldBe` map Just [1..10]
             reports <- for childMons takeMVar
@@ -800,7 +800,7 @@ spec = do
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             sv <- newTQueueIO
-            withAsync (newSupervisor sv OneForAll def def procs) $ \_ -> do
+            withAsync (newSupervisor sv OneForAll def procs) $ \_ -> do
                 rs <- for childQs $ \ch -> call def ch True
                 rs `shouldBe` map Just [1..volume]
                 async $ threadDelay 1 *> cast (head childQs) False
