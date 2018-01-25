@@ -279,7 +279,7 @@ spec = do
             reports `shouldSatisfy` and . map ((==) Killed . fst)
 
         it "can be killed when children is finishing at the same time" $ do
-            let volume          = 1000
+            let volume = 1000
             rs <- for [1..volume] $ \n -> do
                 childQ <- newTQueueIO
                 childMon <- newEmptyMVar
@@ -415,7 +415,7 @@ spec = do
             reports `shouldSatisfy` and . map ((==) Killed . fst)
 
         it "can be killed when children is finishing at the same time" $ do
-            let volume          = 1000
+            let volume = 1000
             rs <- for [1..volume] $ \n -> do
                 childQ <- newTQueueIO
                 childMon <- newTQueueIO
@@ -791,7 +791,7 @@ spec = do
             reports `shouldSatisfy` and . map ((==) Killed . fst)
 
         it "can be killed when children is finishing at the same time" $ do
-            let volume          = 1000
+            let volume = 1000
             rs <- for [1..volume] $ \n -> do
                 childQ <- newTQueueIO
                 childMon <- newTQueueIO
