@@ -437,6 +437,134 @@ spec = do
             killedCound `shouldNotBe` 0
             normalCound + killedCound `shouldBe` volume
 
+        it "intensive normal exit of permanent child causes termination of Supervisor itself" $ do
+            rs <- for [1,2] $ \n -> do
+                childQ <- newTQueueIO
+                childMon <- newEmptyMVar
+                let monitor reason tid  = putMVar childMon (reason, tid)
+                    process             = newProcessSpec [monitor] Permanent $ simpleCountingServer childQ n $> ()
+                pure (childQ, childMon, process)
+            let (childQs, childMons, procs) = unzip3 rs
+            sv <- newTQueueIO
+            a <- async $ newSupervisor sv OneForOne def def procs
+            pmap <- newProcessMap
+            rs1 <- for childQs $ \ch -> call def ch True
+            rs1 `shouldBe` map Just [1,2]
+            rs2 <- for childQs $ \ch -> call def ch True
+            rs2 `shouldBe` map Just [2,3]
+            cast (head childQs) False
+            report1 <- takeMVar (head childMons)
+            fst report1 `shouldBe` Normal
+            rs3 <- for childQs $ \ch -> call def ch True
+            rs3 `shouldBe` map Just [1,4]
+            cast (head childQs) False
+            report2 <- takeMVar (head childMons)
+            fst report2 `shouldBe` Normal
+            r <- wait a
+            r `shouldBe` ()
+
+        it "intensive crash of permanent child causes termination of Supervisor itself" $ do
+            rs <- for [1,2] $ \n -> do
+                marker <- newEmptyMVar
+                trigger <- newEmptyMVar
+                childMon <- newEmptyMVar
+                let monitor reason tid  = putMVar childMon (reason, tid)
+                    process             = newProcessSpec [monitor] Permanent $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
+                pure (marker, trigger, childMon, process)
+            let (markers, triggers, childMons, procs) = unzip4 rs
+            sv <- newTQueueIO
+            a <- async $ newSupervisor sv OneForOne def def procs
+            rs1 <- for markers $ \m -> takeMVar m
+            rs1 `shouldBe` [(),()]
+            putMVar (head triggers) ()
+            report1 <- takeMVar $ head childMons
+            fst report1 `shouldBe` UncaughtException
+            threadDelay 1000
+            rs2 <- takeMVar $ head markers
+            rs2 `shouldBe` ()
+            putMVar (triggers !! 1) ()
+            report2 <- takeMVar $ childMons !! 1
+            fst report2 `shouldBe` UncaughtException
+            r <- wait a
+            r `shouldBe` ()
+
+        it "intensive killing permanent child causes termination of Supervisor itself" $ do
+            blocker <- newEmptyMVar
+            rs <- for [1,2] $ \n -> do
+                marker <- newEmptyMVar
+                childMon <- newEmptyMVar
+                let monitor reason tid  = putMVar childMon (reason, tid)
+                    process             = newProcessSpec [monitor] Permanent $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
+                pure (marker, childMon, process)
+            let (markers, childMons, procs) = unzip3 rs
+            sv <- newTQueueIO
+            a <- async $ newSupervisor sv OneForOne def def procs
+            rs1 <- for markers $ \m -> takeMVar m
+            length rs1 `shouldBe` 2
+            killThread $ head rs1
+            report1 <- takeMVar $ head childMons
+            fst report1 `shouldBe` Killed
+            threadDelay 1000
+            rs2 <- isEmptyMVar $ head markers
+            rs2 `shouldBe` False
+            tid2 <- takeMVar $ head markers
+            killThread tid2
+            report2 <- takeMVar $ head childMons
+            fst report2 `shouldBe` Killed
+            r <- wait a
+            r `shouldBe` ()
+
+        it "intensive crash of transient child causes termination of Supervisor itself" $ do
+            rs <- for [1,2] $ \n -> do
+                marker <- newEmptyMVar
+                trigger <- newEmptyMVar
+                childMon <- newEmptyMVar
+                let monitor reason tid  = putMVar childMon (reason, tid)
+                    process             = newProcessSpec [monitor] Transient $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
+                pure (marker, trigger, childMon, process)
+            let (markers, triggers, childMons, procs) = unzip4 rs
+            sv <- newTQueueIO
+            a <- async $ newSupervisor sv OneForOne def def procs
+            rs1 <- for markers $ \m -> takeMVar m
+            rs1 `shouldBe` [(),()]
+            putMVar (head triggers) ()
+            report <- takeMVar $ head childMons
+            fst report `shouldBe` UncaughtException
+            threadDelay 1000
+            rs2 <- takeMVar $ head markers
+            rs2 `shouldBe` ()
+            putMVar (triggers !! 1) ()
+            report <- takeMVar $ childMons !! 1
+            fst report `shouldBe` UncaughtException
+            r <- wait a
+            r `shouldBe` ()
+
+        it "intensive killing transient child causes termination of Supervisor itself" $ do
+            blocker <- newEmptyMVar
+            rs <- for [1,2] $ \n -> do
+                marker <- newEmptyMVar
+                childMon <- newEmptyMVar
+                let monitor reason tid  = putMVar childMon (reason, tid)
+                    process             = newProcessSpec [monitor] Transient $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
+                pure (marker, childMon, process)
+            let (markers, childMons, procs) = unzip3 rs
+            sv <- newTQueueIO
+            a <- async $ newSupervisor sv OneForOne def def procs
+            rs1 <- for markers $ \m -> takeMVar m
+            length rs1 `shouldBe` 2
+            killThread $ head rs1
+            report1 <- takeMVar $ head childMons
+            fst report1 `shouldBe` Killed
+            threadDelay 1000
+            rs2 <- isEmptyMVar $ head markers
+            rs2 `shouldBe` False
+            tid2 <- takeMVar $ head markers
+            killThread tid2
+            report2 <- takeMVar $ head childMons
+            fst report2 `shouldBe` Killed
+            r <- wait a
+            r `shouldBe` ()
+
     describe "One-for-all Supervisor with static childlen" $ do
         it "automatically starts children based on given ProcessSpec list" $ do
             rs <- for [1,2,3] $ \n -> do
