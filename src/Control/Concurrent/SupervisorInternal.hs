@@ -35,7 +35,7 @@ type MessageQueue a = TQueue a
 
 newStateMachine
     :: MessageQueue message -- ^ Event input queue of the state machine.
-    -> state                -- ^ Initial state of the state machinwe.
+    -> state                -- ^ Initial state of the state machine.
     -> (state -> message -> IO (Either result state))
                             -- ^ Event handler which processes event and returns result or next state.
     -> IO result
@@ -156,8 +156,8 @@ newProcess procMap procSpec@(ProcessSpec monitors _ action) = mask_ $ do
     Restart intensity handling.
 -}
 data RestartSensitivity = RestartSensitivity
-    { restartSensitivityIntensity   :: Int
-    , restartSensitivityPeriod      :: TimeSpec
+    { restartSensitivityIntensity :: Int
+    , restartSensitivityPeriod    :: TimeSpec
     }
 
 instance Default RestartSensitivity where
@@ -244,10 +244,6 @@ newSupervisor
     :: SupervisorQueue      -- ^ Inbox message queue of the supervisor.
     -> Strategy             -- ^ Restarting strategy of monitored processes.
     -> RestartSensitivity   -- ^ Restart intensity sensitivity in restart count and period.
-    -- -> RestartIntensity -- ^ Maximum restart intensity of the process.  Used with the next argument.
-    --                     --   If proccess crashed more than this value within given period, the supervisor will restart itself.
-    -- -> RestartPeriod    -- ^ Period of restart intensity window.  If intense crash happened within this period,
-    --                     --   the supervisor will restart itself.
     -> [ProcessSpec]        -- ^ List of supervised process specifications.
     -> IO ()
 newSupervisor inbox strategy (RestartSensitivity maxR maxT) procSpecs = bracket newProcessMap (killAllSupervisedProcess inbox) initSupervisor

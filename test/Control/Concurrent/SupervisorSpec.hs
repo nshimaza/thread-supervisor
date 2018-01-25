@@ -19,7 +19,9 @@ import           Data.List                     (unzip4)
 import           Data.Maybe                    (fromJust, isJust, isNothing)
 import           Data.Traversable              (for)
 import           Data.Typeable                 (typeOf)
-import           System.Clock                  (Clock (Monotonic), TimeSpec (..), getTime, toNanoSecs)
+import           System.Clock                  (Clock (Monotonic),
+                                                TimeSpec (..), getTime,
+                                                toNanoSecs)
 
 import           Test.Hspec
 
@@ -295,8 +297,8 @@ spec = do
                 threadDelay 10000
             reports <- for childMons takeMVar
             length reports `shouldBe` volume
-            let normalCound = length . filter ((==) Normal . fst) $ reports
-                killedCound = length . filter ((==) Killed . fst) $ reports
+            let normalCount = length . filter ((==) Normal . fst) $ reports
+                killedCount = length . filter ((==) Killed . fst) $ reports
             normalCound `shouldNotBe` 0
             killedCound `shouldNotBe` 0
             normalCound + killedCound `shouldBe` volume
@@ -430,8 +432,8 @@ spec = do
                 threadDelay 10000
             reports <- for childMons $ atomically . readTQueue
             length reports `shouldBe` volume
-            let normalCound = length . filter ((==) Normal . fst) $ reports
-                killedCound = length . filter ((==) Killed . fst) $ reports
+            let normalCount = length . filter ((==) Normal . fst) $ reports
+                killedCount = length . filter ((==) Killed . fst) $ reports
             normalCound `shouldNotBe` 0
             killedCound `shouldNotBe` 0
             normalCound + killedCound `shouldBe` volume
