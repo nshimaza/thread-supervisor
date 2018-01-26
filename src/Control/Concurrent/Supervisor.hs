@@ -11,7 +11,7 @@ A simplified implementation of Erlang/OTP like supervisor over async and underly
 
 module Control.Concurrent.Supervisor
     (
-    -- * Supervisable thread
+    -- * Supervisable IO action
       Restart (..)
     , ExitReason (..)
     , Monitor
@@ -19,20 +19,22 @@ module Control.Concurrent.Supervisor
     , newProcessSpec
     , addMonitor
     -- * Supervisor
-    , MessageQueue (..)
-    , newStateMachine
-    , sendMessage
-    , CallTimeout (..)
-    , ServerQueue (..)
-    , newServer
-    , cast
-    , call
-    , callAsync
     , RestartSensitivity (..)
     , Strategy (..)
     , newSupervisor
     , newSimpleOneForOneSupervisor
     , newChild
+    -- * State machine
+    , MessageQueue (..)
+    , newStateMachine
+    , sendMessage
+    , CallTimeout (..)
+    -- * Simple server behavior
+    , ServerQueue (..)
+    , newServer
+    , cast
+    , call
+    , callAsync
     ) where
 
 import           Control.Concurrent.SupervisorInternal

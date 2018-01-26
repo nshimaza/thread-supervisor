@@ -150,28 +150,79 @@ callAsync timeout srv req cont = async $ call timeout srv req >>= cont
 
 
 {-
-    Supervisable thread.
+    Supervisable IO action.
 -}
-data Restart = Permanent | Transient | Temporary deriving (Eq, Show)
-data ExitReason = Normal | UncaughtException | Killed deriving (Eq, Show)
-type Monitor = ExitReason -> ThreadId -> IO ()
+
+{-|
+    'Restart' defines when a terminated child thread triggers restart operation by its supervisor.
+    'Restart' only define when it triggers restart operation.  It does not directly means if the thread
+    will be or will not be restarted.  It is determined by restart strategy of supervisor.
+    For example, a static 'Temporary' thread never trigger restart on its termination but static 'Temporary'
+    thread will be restarted if another 'Permanent' or 'Transient' thread with common supervisor triggered
+    restart operation and the supervisor has 'OneForAll' strategy.
+-}
+data Restart
+    = Permanent -- ^ 'Permanent' thread always triggers restart.
+    | Transient -- ^ 'Transient' thread triggers restart only if it was terminated by exception.
+    | Temporary -- ^ 'Temporary' thread never triggers restart.
+    deriving (Eq, Show)
+
+-- | 'ExitReason' indicates reason of thread termination.
+data ExitReason
+    = Normal                -- ^ Thread was normally finished.
+    | UncaughtException     -- ^ A synchronous exception was thrown and it was not caught.
+                            --   This indicates some unhandled error was happen inside of the thread handler.
+    | Killed                -- ^ An asynchronous exception was thrown.
+                            --   This also happen when the thread was killed by supervisor.
+    deriving (Eq, Show)
+
+-- | 'Monitor' is user supplied callback function which is called when monitored thread is terminated.
+type Monitor
+    = ExitReason    -- ^ Reason of thread termination.
+    -> ThreadId     -- ^ ID of terminated thread.
+    -> IO ()
+
+{-|
+    'ProcessSpec' is representation of IO action which can be supervised by supervisor.
+    'Supervisor' can run the IO action with separate thread, monitor its termination and
+    restart it based on restart type.  Additionally, user can also receive notification
+    on its termination by supplying user\'s own callback functions.
+-}
 data ProcessSpec = ProcessSpec [Monitor] Restart (IO ())
 
-newProcessSpec :: [Monitor] -> Restart -> IO () -> ProcessSpec
+-- | Create a 'ProcessSpec'.
+newProcessSpec
+    :: [Monitor]    -- ^ List of callback functions.  They are called when the IO action was terminated.
+    -> Restart      -- ^ Restart type of resulting 'ProcessSpec'.  One of 'Permanent', 'Transient' or 'Temporary'.
+    -> IO ()        -- ^ User supplied IO action which the 'ProcessSpec' actually does.
+    -> ProcessSpec
 newProcessSpec = ProcessSpec
 
-addMonitor :: Monitor -> ProcessSpec -> ProcessSpec
+-- | Add a 'Monitor' function to existing 'ProcessSpec'.
+addMonitor
+    :: Monitor      -- ^ Callback function called when the IO action of the 'ProcessSpec' terminated.
+    -> ProcessSpec  -- ^ Existing 'ProcessSpec' where the 'Monitor' is going to be added.
+    -> ProcessSpec  -- ^ Newly created 'ProcessSpec' with the 'Monitor' added.
 addMonitor monitor (ProcessSpec monitors restart action) = ProcessSpec (monitor:monitors) restart action
 
+{-|
+    'ProcessMap' is mutable variable which holds pool of living threads and 'ProcessSpec' of each thread.
+    ProcessMap is used inside of supervisor only.
+-}
 type ProcessMap = IORef (Map ThreadId (Async (), ProcessSpec))
 
+-- | Create an empty 'ProcessMap'
 newProcessMap :: IO ProcessMap
 newProcessMap = newIORef empty
 
+{-|
+    Starting new thread based on given 'ProcessSpec', register the thread to given 'ProcessMap'
+    then returns 'Async' of the thread.
+-}
 newProcess
-    :: ProcessMap   -- ^ Map of current live processes where the new process to be added.
-     -> ProcessSpec -- ^ Specification of newly started process.
-     -> IO (Async ())
+    :: ProcessMap       -- ^ Map of current live processes where the new process is going to be added.
+     -> ProcessSpec     -- ^ Specification of newly started process.
+     -> IO (Async ())   -- ^ 'Async' representing forked thread.
 newProcess procMap procSpec@(ProcessSpec monitors _ action) = mask_ $ do
     a <- asyncWithUnmask $ \unmask ->
         let notify reason   = uninterruptibleMask_ . traverse_ (\monitor -> myThreadId >>= monitor reason)
@@ -183,9 +234,12 @@ newProcess procMap procSpec@(ProcessSpec monitors _ action) = mask_ $ do
 {-
     Restart intensity handling.
 -}
+{-|
+    'RestartSensitivity' defines condition how supervisor determines intensive restart is happening.
+-}
 data RestartSensitivity = RestartSensitivity
-    { restartSensitivityIntensity :: Int
-    , restartSensitivityPeriod    :: TimeSpec
+    { restartSensitivityIntensity :: Int        -- ^ Maximum number of restart accepted within the period below.
+    , restartSensitivityPeriod    :: TimeSpec   -- ^ Length of time window in 'TimeSpec' where the number of restarts is counted.
     }
 
 instance Default RestartSensitivity where
