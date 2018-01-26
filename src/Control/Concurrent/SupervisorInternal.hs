@@ -236,6 +236,9 @@ newProcess procMap procSpec@(ProcessSpec monitors _ action) = mask_ $ do
 -}
 {-|
     'RestartSensitivity' defines condition how supervisor determines intensive restart is happening.
+    If more than 'restartSensitivityIntensity' time of restart is triggered within 'restartSensitivityPeriod',
+    supervisor decides intensive restart is happening and it terminates itself.
+    Default intensity (maximum number of acceptable restart) is 1.  Default period is 5 seconds.
 -}
 data RestartSensitivity = RestartSensitivity
     { restartSensitivityIntensity :: Int        -- ^ Maximum number of restart accepted within the period below.
