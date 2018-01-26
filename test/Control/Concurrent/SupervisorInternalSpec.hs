@@ -1,6 +1,18 @@
 module Control.Concurrent.SupervisorInternalSpec where
 
+import           Control.Concurrent.Async      (async, asyncThreadId, cancel,
+                                                poll, wait, withAsync)
+import           Control.Concurrent.MVar       (isEmptyMVar, newEmptyMVar,
+                                                putMVar, readMVar, takeMVar)
+import           Control.Concurrent.STM.TQueue (newTQueueIO, readTQueue,
+                                                tryReadTQueue, writeTQueue)
+import           Control.Exception.Safe        (bracket, throwString)
+import           Control.Monad.STM             (atomically)
 import           Data.Default                          (def)
+import           Data.Foldable                 (for_)
+import           Data.Functor                  (($>))
+import           Data.Maybe                    (fromJust, isJust, isNothing)
+import           Data.Traversable              (for)
 import           System.Clock                          (TimeSpec (..),
                                                         fromNanoSecs)
 
@@ -73,3 +85,88 @@ spec = do
                 crash3      = TimeSpec 6 0
                 (result, _) = isRestartIntense (TimeSpec 5 0) crash3 hist2
             result `shouldBe` False
+
+    describe "Process" $ do
+        it "reports exit code Normal on normal exit" $ do
+            trigger <- newEmptyMVar
+            pmap <- newProcessMap
+            sv <- newTQueueIO
+            let monitor reason tid  = atomically $ writeTQueue sv (reason, tid)
+                process             = newProcessSpec [monitor] Temporary $ readMVar trigger $> ()
+            a <- newProcess pmap process
+            noReport <- atomically $ tryReadTQueue sv
+            noReport `shouldSatisfy` isNothing
+            putMVar trigger ()
+            report <- atomically $ readTQueue sv
+            report `shouldBe` (Normal, asyncThreadId a)
+
+        it "reports exit code UncaughtException on synchronous exception which wasn't caught" $ do
+            trigger <- newEmptyMVar
+            pmap <- newProcessMap
+            sv <- newTQueueIO
+            let monitor reason tid  = atomically $ writeTQueue sv (reason, tid)
+                process             = newProcessSpec [monitor] Temporary $ readMVar trigger *> throwString "oops" $> ()
+            a <- newProcess pmap process
+            noReport <- atomically $ tryReadTQueue sv
+            noReport `shouldSatisfy` isNothing
+            putMVar trigger ()
+            report <- atomically $ readTQueue sv
+            report `shouldBe` (UncaughtException, asyncThreadId a)
+
+        it "reports exit code Killed when it received asynchronous exception" $ do
+            blocker <- newEmptyMVar
+            pmap <- newProcessMap
+            sv <- newTQueueIO
+            let monitor reason tid  = atomically $ writeTQueue sv (reason, tid)
+                process             = newProcessSpec [monitor] Temporary $ readMVar blocker $> ()
+            a <- newProcess pmap process
+            noReport <- atomically $ tryReadTQueue sv
+            noReport `shouldSatisfy` isNothing
+            cancel a
+            report <- atomically $ readTQueue sv
+            report `shouldBe` (Killed, asyncThreadId a)
+
+        it "can notify its normal exit to multiple monitors" $ do
+            trigger <- newEmptyMVar
+            pmap <- newProcessMap
+            svs <- for [1..10] $ const newTQueueIO
+            let mons    = (\sv reason tid -> atomically $ writeTQueue sv (reason, tid)) <$> svs
+                process = newProcessSpec mons Temporary $ readMVar trigger $> ()
+            a <- newProcess pmap process
+            for_ svs $ \sv -> do
+                noReport <- atomically $ tryReadTQueue sv
+                noReport `shouldSatisfy` isNothing
+            putMVar trigger ()
+            for_ svs $ \sv -> do
+                report <- atomically $ readTQueue sv
+                report `shouldBe` (Normal, asyncThreadId a)
+
+        it "can notify its exit by uncaught exception to multiple monitors" $ do
+            trigger <- newEmptyMVar
+            pmap <- newProcessMap
+            svs <- for [1..10] $ const newTQueueIO
+            let mons    = (\sv reason tid -> atomically $ writeTQueue sv (reason, tid)) <$> svs
+                process = newProcessSpec mons Temporary $ readMVar trigger *> throwString "oops" $> ()
+            a <- newProcess pmap process
+            for_ svs $ \sv -> do
+                noReport <- atomically $ tryReadTQueue sv
+                noReport `shouldSatisfy` isNothing
+            putMVar trigger ()
+            for_ svs $ \sv -> do
+                report <- atomically $ readTQueue sv
+                report `shouldBe` (UncaughtException, asyncThreadId a)
+
+        it "can notify its exit by asynchronous exception to multiple monitors" $ do
+            blocker <- newEmptyMVar
+            pmap <- newProcessMap
+            svs <- for [1..10] $ const newTQueueIO
+            let mons    = (\sv reason tid -> atomically $ writeTQueue sv (reason, tid)) <$> svs
+                process = newProcessSpec mons Temporary $ readMVar blocker $> ()
+            a <- newProcess pmap process
+            for_ svs $ \sv -> do
+                noReport <- atomically $ tryReadTQueue sv
+                noReport `shouldSatisfy` isNothing
+            cancel a
+            for_ svs $ \sv -> do
+                report <- atomically $ readTQueue sv
+                report `shouldBe` (Killed, asyncThreadId a)

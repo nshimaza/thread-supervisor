@@ -1,6 +1,25 @@
+{-|
+Module      : Control.Concurrent.Supervisor
+Copyright   : (c) Naoto Shimazaki 2018
+License     : MIT (see the file LICENSE)
+Maintainer  : https://github.com/nshimaza
+Stability   : experimental
+
+A simplified implementation of Erlang/OTP like supervisor over async and underlying behaviors.
+
+-}
+
 module Control.Concurrent.Supervisor
     (
-      MessageQueue (..)
+    -- * Supervisable thread
+      Restart (..)
+    , ExitReason (..)
+    , Monitor
+    , ProcessSpec
+    , newProcessSpec
+    , addMonitor
+    -- * Supervisor
+    , MessageQueue (..)
     , newStateMachine
     , sendMessage
     , CallTimeout (..)
@@ -9,20 +28,11 @@ module Control.Concurrent.Supervisor
     , cast
     , call
     , callAsync
-    , Restart (..)
-    , ExitReason (..)
-    , Monitor
-    , ProcessSpec
-    , newProcessSpec
-    , addMonitor
-    , ProcessMap
-    , newProcessMap
-    , newProcess
     , RestartSensitivity (..)
     , Strategy (..)
     , newSupervisor
     , newSimpleOneForOneSupervisor
     , newChild
-    )where
+    ) where
 
 import           Control.Concurrent.SupervisorInternal

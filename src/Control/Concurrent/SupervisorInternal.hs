@@ -1,3 +1,14 @@
+{-|
+Module      : Control.Concurrent.SupervisorInternal
+Copyright   : (c) Naoto Shimazaki 2018
+License     : MIT (see the file LICENSE)
+Maintainer  : https://github.com/nshimaza
+Stability   : experimental
+
+A simplified implementation of Erlang/OTP like supervisor over async and underlying behaviors.
+This is internal module where all real implementations present.
+
+-}
 module Control.Concurrent.SupervisorInternal where
 
 import           Prelude                       hiding (lookup)
@@ -31,19 +42,35 @@ import           Data.DelayedQueue             (DelayedQueue,
 {-
     Basic message queue and state machine behavior.
 -}
+-- | Inbox message queue of finite state machine.
 type MessageQueue a = TQueue a
 
+{-|
+    Create a new finite state machine.
+
+    The state machine waits for new message at 'MessageQueue' then callback message handler given by user.
+    The message handler must return 'Right' with new state or 'Left' with final result.
+    When 'Right' is returned, the state machine waits next message.
+    When 'Left' is returned, the state machine terminates and returns the result.
+
+    'newStateMachine' returns an IO action wrapping the state machine described above.
+    The returned IO action can be executed within an 'Async' or bare thread.
+    Note that the IO action is designed to run in separate thread from main thread.
+    If you try to run the IO action at main thread without having producer of the message queue you gave,
+    the state machine will dead lock.
+-}
 newStateMachine
     :: MessageQueue message -- ^ Event input queue of the state machine.
     -> state                -- ^ Initial state of the state machine.
     -> (state -> message -> IO (Either result state))
-                            -- ^ Event handler which processes event and returns result or next state.
-    -> IO result
+                            -- ^ Message handler which processes event and returns result or next state.
+    -> IO result            -- ^ Return value when the state machine terminated.
 newStateMachine inbox initialState messageHandler = go $ Right initialState
   where
     go (Right state) = go =<< mask_ (messageHandler state =<< atomically (readTQueue inbox))
     go (Left result) = pure result
 
+-- | Send a value to given message queue for state machine.
 sendMessage
     :: MessageQueue message -- ^ Queue the event to be sent.
     -> message              -- ^ Sent event.
@@ -84,6 +111,7 @@ cast
     -> IO ()
 cast srv = sendMessage srv . Cast
 
+-- | Timeout of call method for server behavior in microseconds.  Default is 5 second.
 newtype CallTimeout = CallTimeout Int
 
 instance Default CallTimeout where
@@ -162,16 +190,6 @@ data RestartSensitivity = RestartSensitivity
 
 instance Default RestartSensitivity where
     def = RestartSensitivity 1 TimeSpec { sec = 5, nsec = 0 }
-
--- newtype RestartPeriod = RestartPeriod TimeSpec
-
--- instance Default RestartPeriod where
---     def = RestartPeriod TimeSpec { sec = 5, nsec = 0 }
-
--- newtype RestartIntensity = RestartIntensity Int
-
--- instance Default RestartIntensity where
---     def = RestartIntensity 1
 
 newtype RestartHist = RestartHist (DelayedQueue TimeSpec) deriving (Eq, Show)
 

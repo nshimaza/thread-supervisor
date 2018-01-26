@@ -121,90 +121,6 @@ spec = do
             withAsync srv $ \_ -> do
                 r1 <- call (CallTimeout 10000) srvQ ()
                 (r1 :: Maybe ()) `shouldBe` Nothing
-    describe "Process" $ do
-        it "reports exit code Normal on normal exit" $ do
-            trigger <- newEmptyMVar
-            pmap <- newProcessMap
-            sv <- newTQueueIO
-            let monitor reason tid  = atomically $ writeTQueue sv (reason, tid)
-                process             = newProcessSpec [monitor] Temporary $ readMVar trigger $> ()
-            a <- newProcess pmap process
-            noReport <- atomically $ tryReadTQueue sv
-            noReport `shouldSatisfy` isNothing
-            putMVar trigger ()
-            report <- atomically $ readTQueue sv
-            report `shouldBe` (Normal, asyncThreadId a)
-
-        it "reports exit code UncaughtException on synchronous exception which wasn't caught" $ do
-            trigger <- newEmptyMVar
-            pmap <- newProcessMap
-            sv <- newTQueueIO
-            let monitor reason tid  = atomically $ writeTQueue sv (reason, tid)
-                process             = newProcessSpec [monitor] Temporary $ readMVar trigger *> throwString "oops" $> ()
-            a <- newProcess pmap process
-            noReport <- atomically $ tryReadTQueue sv
-            noReport `shouldSatisfy` isNothing
-            putMVar trigger ()
-            report <- atomically $ readTQueue sv
-            report `shouldBe` (UncaughtException, asyncThreadId a)
-
-        it "reports exit code Killed when it received asynchronous exception" $ do
-            blocker <- newEmptyMVar
-            pmap <- newProcessMap
-            sv <- newTQueueIO
-            let monitor reason tid  = atomically $ writeTQueue sv (reason, tid)
-                process             = newProcessSpec [monitor] Temporary $ readMVar blocker $> ()
-            a <- newProcess pmap process
-            noReport <- atomically $ tryReadTQueue sv
-            noReport `shouldSatisfy` isNothing
-            cancel a
-            report <- atomically $ readTQueue sv
-            report `shouldBe` (Killed, asyncThreadId a)
-
-        it "can notify its normal exit to multiple monitors" $ do
-            trigger <- newEmptyMVar
-            pmap <- newProcessMap
-            svs <- for [1..10] $ const newTQueueIO
-            let mons    = (\sv reason tid -> atomically $ writeTQueue sv (reason, tid)) <$> svs
-                process = newProcessSpec mons Temporary $ readMVar trigger $> ()
-            a <- newProcess pmap process
-            for_ svs $ \sv -> do
-                noReport <- atomically $ tryReadTQueue sv
-                noReport `shouldSatisfy` isNothing
-            putMVar trigger ()
-            for_ svs $ \sv -> do
-                report <- atomically $ readTQueue sv
-                report `shouldBe` (Normal, asyncThreadId a)
-
-        it "can notify its exit by uncaught exception to multiple monitors" $ do
-            trigger <- newEmptyMVar
-            pmap <- newProcessMap
-            svs <- for [1..10] $ const newTQueueIO
-            let mons    = (\sv reason tid -> atomically $ writeTQueue sv (reason, tid)) <$> svs
-                process = newProcessSpec mons Temporary $ readMVar trigger *> throwString "oops" $> ()
-            a <- newProcess pmap process
-            for_ svs $ \sv -> do
-                noReport <- atomically $ tryReadTQueue sv
-                noReport `shouldSatisfy` isNothing
-            putMVar trigger ()
-            for_ svs $ \sv -> do
-                report <- atomically $ readTQueue sv
-                report `shouldBe` (UncaughtException, asyncThreadId a)
-
-        it "can notify its exit by asynchronous exception to multiple monitors" $ do
-            blocker <- newEmptyMVar
-            pmap <- newProcessMap
-            svs <- for [1..10] $ const newTQueueIO
-            let mons    = (\sv reason tid -> atomically $ writeTQueue sv (reason, tid)) <$> svs
-                process = newProcessSpec mons Temporary $ readMVar blocker $> ()
-            a <- newProcess pmap process
-            for_ svs $ \sv -> do
-                noReport <- atomically $ tryReadTQueue sv
-                noReport `shouldSatisfy` isNothing
-            cancel a
-            for_ svs $ \sv -> do
-                report <- atomically $ readTQueue sv
-                report `shouldBe` (Killed, asyncThreadId a)
 
     describe "SimpleOneForOneSupervisor" $ do
         it "it starts a dynamic child" $ do
@@ -245,23 +161,17 @@ spec = do
                 r `shouldBe` True
 
         it "does not exit itself by massive child crash" $ do
-            pmap <- newProcessMap
             sv <- newTQueueIO
-            svMon <- newEmptyMVar
-            let monitor reason tid  = putMVar svMon (reason, tid)
-            bracket
-                (newProcess pmap $ newProcessSpec [monitor] Temporary $ newSimpleOneForOneSupervisor sv)
-                cancel
-                $ \_ -> do
-                    blocker <- newEmptyMVar
-                    for_ [1..10] $ \_ -> do
-                        Just a <- newChild def sv $ newProcessSpec [] Permanent $ readMVar blocker $> ()
-                        cancel a
-                    threadDelay 1000
-                    r <- isEmptyMVar svMon
-                    r `shouldBe` True
-                    maybeAsync <- newChild def sv $ newProcessSpec [] Permanent $ readMVar blocker $> ()
-                    isJust maybeAsync `shouldBe` True
+            withAsync (newSimpleOneForOneSupervisor sv) $ \a -> do
+                blocker <- newEmptyMVar
+                for_ [1..10] $ \_ -> do
+                    Just a <- newChild def sv $ newProcessSpec [] Permanent $ readMVar blocker $> ()
+                    cancel a
+                threadDelay 1000
+                r <- poll a
+                r `shouldSatisfy` isNothing
+                maybeAsync <- newChild def sv $ newProcessSpec [] Permanent $ readMVar blocker $> ()
+                isJust maybeAsync `shouldBe` True
 
         it "kills all children when it is killed" $ do
             rs <- for [1..10] $ \n -> do
@@ -299,9 +209,9 @@ spec = do
             length reports `shouldBe` volume
             let normalCount = length . filter ((==) Normal . fst) $ reports
                 killedCount = length . filter ((==) Killed . fst) $ reports
-            normalCound `shouldNotBe` 0
-            killedCound `shouldNotBe` 0
-            normalCound + killedCound `shouldBe` volume
+            normalCount `shouldNotBe` 0
+            killedCount `shouldNotBe` 0
+            normalCount + killedCount `shouldBe` volume
 
     describe "One-for-one Supervisor with static childlen" $ do
         it "automatically starts children based on given ProcessSpec list" $ do
@@ -434,9 +344,9 @@ spec = do
             length reports `shouldBe` volume
             let normalCount = length . filter ((==) Normal . fst) $ reports
                 killedCount = length . filter ((==) Killed . fst) $ reports
-            normalCound `shouldNotBe` 0
-            killedCound `shouldNotBe` 0
-            normalCound + killedCound `shouldBe` volume
+            normalCount `shouldNotBe` 0
+            killedCount `shouldNotBe` 0
+            normalCount + killedCount `shouldBe` volume
 
         it "intensive normal exit of permanent child causes termination of Supervisor itself" $ do
             rs <- for [1,2] $ \n -> do
