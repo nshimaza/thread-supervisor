@@ -357,21 +357,21 @@ spec = do
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             sv <- newTQueueIO
-            a <- async $ newSupervisor sv OneForOne def procs
-            rs1 <- for childQs $ \ch -> call def ch True
-            rs1 `shouldBe` Just <$> [1,2]
-            rs2 <- for childQs $ \ch -> call def ch True
-            rs2 `shouldBe` Just <$> [2,3]
-            cast (head childQs) False
-            report1 <- takeMVar (head childMons)
-            fst report1 `shouldBe` Normal
-            rs3 <- for childQs $ \ch -> call def ch True
-            rs3 `shouldBe` Just <$> [1,4]
-            cast (head childQs) False
-            report2 <- takeMVar (head childMons)
-            fst report2 `shouldBe` Normal
-            r <- wait a
-            r `shouldBe` ()
+            withAsync (newSupervisor sv OneForOne def procs) $ \a -> do
+                rs1 <- for childQs $ \ch -> call def ch True
+                rs1 `shouldBe` Just <$> [1,2]
+                rs2 <- for childQs $ \ch -> call def ch True
+                rs2 `shouldBe` Just <$> [2,3]
+                cast (head childQs) False
+                report1 <- takeMVar (head childMons)
+                fst report1 `shouldBe` Normal
+                rs3 <- for childQs $ \ch -> call def ch True
+                rs3 `shouldBe` Just <$> [1,4]
+                cast (head childQs) False
+                report2 <- takeMVar (head childMons)
+                fst report2 `shouldBe` Normal
+                r <- wait a
+                r `shouldBe` ()
 
         it "intensive crash of permanent child causes termination of Supervisor itself" $ do
             rs <- for [1,2] $ \n -> do
@@ -383,20 +383,20 @@ spec = do
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
             sv <- newTQueueIO
-            a <- async $ newSupervisor sv OneForOne def procs
-            rs1 <- for markers takeMVar
-            rs1 `shouldBe` [(), ()]
-            putMVar (head triggers) ()
-            report1 <- takeMVar $ head childMons
-            fst report1 `shouldBe` UncaughtException
-            threadDelay 1000
-            rs2 <- takeMVar $ head markers
-            rs2 `shouldBe` ()
-            putMVar (triggers !! 1) ()
-            report2 <- takeMVar $ childMons !! 1
-            fst report2 `shouldBe` UncaughtException
-            r <- wait a
-            r `shouldBe` ()
+            withAsync (newSupervisor sv OneForOne def procs) $ \a -> do
+                rs1 <- for markers takeMVar
+                rs1 `shouldBe` [(), ()]
+                putMVar (head triggers) ()
+                report1 <- takeMVar $ head childMons
+                fst report1 `shouldBe` UncaughtException
+                threadDelay 1000
+                rs2 <- takeMVar $ head markers
+                rs2 `shouldBe` ()
+                putMVar (triggers !! 1) ()
+                report2 <- takeMVar $ childMons !! 1
+                fst report2 `shouldBe` UncaughtException
+                r <- wait a
+                r `shouldBe` ()
 
         it "intensive killing permanent child causes termination of Supervisor itself" $ do
             blocker <- newEmptyMVar
@@ -408,20 +408,20 @@ spec = do
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
             sv <- newTQueueIO
-            a <- async $ newSupervisor sv OneForOne def procs
-            tids <- for markers takeMVar
-            killThread $ head tids
-            report1 <- takeMVar $ head childMons
-            fst report1 `shouldBe` Killed
-            threadDelay 1000
-            rs2 <- isEmptyMVar $ head markers
-            rs2 `shouldBe` False
-            tid2 <- takeMVar $ head markers
-            killThread tid2
-            report2 <- takeMVar $ head childMons
-            fst report2 `shouldBe` Killed
-            r <- wait a
-            r `shouldBe` ()
+            withAsync (newSupervisor sv OneForOne def procs) $ \a -> do
+                tids <- for markers takeMVar
+                killThread $ head tids
+                report1 <- takeMVar $ head childMons
+                fst report1 `shouldBe` Killed
+                threadDelay 1000
+                rs2 <- isEmptyMVar $ head markers
+                rs2 `shouldBe` False
+                tid2 <- takeMVar $ head markers
+                killThread tid2
+                report2 <- takeMVar $ head childMons
+                fst report2 `shouldBe` Killed
+                r <- wait a
+                r `shouldBe` ()
 
         it "intensive normal exit of transient child does not terminate Supervisor" $ do
             rs <- for [1..10] $ \n -> do
@@ -432,17 +432,17 @@ spec = do
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             sv <- newTQueueIO
-            a <- async $ newSupervisor sv OneForOne def procs
-            rs1 <- for childQs $ \ch -> call def ch True
-            rs1 `shouldBe` Just <$> [1..10]
-            rs2 <- for childQs $ \ch -> call def ch True
-            rs2 `shouldBe` Just <$> [2..11]
-            for_ childQs $ \ch -> cast ch False
-            reports <- for childMons takeMVar
-            reports `shouldSatisfy` and . map ((==) Normal . fst)
-            threadDelay 1000
-            r <- poll a
-            r `shouldSatisfy` isNothing
+            withAsync (newSupervisor sv OneForOne def procs) $ \a -> do
+                rs1 <- for childQs $ \ch -> call def ch True
+                rs1 `shouldBe` Just <$> [1..10]
+                rs2 <- for childQs $ \ch -> call def ch True
+                rs2 `shouldBe` Just <$> [2..11]
+                for_ childQs $ \ch -> cast ch False
+                reports <- for childMons takeMVar
+                reports `shouldSatisfy` and . map ((==) Normal . fst)
+                threadDelay 1000
+                r <- poll a
+                r `shouldSatisfy` isNothing
 
         it "intensive crash of transient child causes termination of Supervisor itself" $ do
             rs <- for [1,2] $ \n -> do
@@ -454,20 +454,20 @@ spec = do
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
             sv <- newTQueueIO
-            a <- async $ newSupervisor sv OneForOne def procs
-            rs1 <- for markers takeMVar
-            rs1 `shouldBe` [(), ()]
-            putMVar (head triggers) ()
-            report1 <- takeMVar $ head childMons
-            fst report1 `shouldBe` UncaughtException
-            threadDelay 1000
-            rs2 <- takeMVar $ head markers
-            rs2 `shouldBe` ()
-            putMVar (triggers !! 1) ()
-            report2 <- takeMVar $ childMons !! 1
-            fst report2 `shouldBe` UncaughtException
-            r <- wait a
-            r `shouldBe` ()
+            withAsync (newSupervisor sv OneForOne def procs) $ \a -> do
+                rs1 <- for markers takeMVar
+                rs1 `shouldBe` [(), ()]
+                putMVar (head triggers) ()
+                report1 <- takeMVar $ head childMons
+                fst report1 `shouldBe` UncaughtException
+                threadDelay 1000
+                rs2 <- takeMVar $ head markers
+                rs2 `shouldBe` ()
+                putMVar (triggers !! 1) ()
+                report2 <- takeMVar $ childMons !! 1
+                fst report2 `shouldBe` UncaughtException
+                r <- wait a
+                r `shouldBe` ()
 
         it "intensive killing transient child causes termination of Supervisor itself" $ do
             blocker <- newEmptyMVar
@@ -479,20 +479,20 @@ spec = do
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
             sv <- newTQueueIO
-            a <- async $ newSupervisor sv OneForOne def procs
-            tids <- for markers takeMVar
-            killThread $ head tids
-            report1 <- takeMVar $ head childMons
-            fst report1 `shouldBe` Killed
-            threadDelay 1000
-            rs2 <- isEmptyMVar $ head markers
-            rs2 `shouldBe` False
-            tid2 <- takeMVar $ head markers
-            killThread tid2
-            report2 <- takeMVar $ head childMons
-            fst report2 `shouldBe` Killed
-            r <- wait a
-            r `shouldBe` ()
+            withAsync (newSupervisor sv OneForOne def procs) $ \a -> do
+                tids <- for markers takeMVar
+                killThread $ head tids
+                report1 <- takeMVar $ head childMons
+                fst report1 `shouldBe` Killed
+                threadDelay 1000
+                rs2 <- isEmptyMVar $ head markers
+                rs2 `shouldBe` False
+                tid2 <- takeMVar $ head markers
+                killThread tid2
+                report2 <- takeMVar $ head childMons
+                fst report2 `shouldBe` Killed
+                r <- wait a
+                r `shouldBe` ()
 
         it "intensive normal exit of temporary child does not terminate Supervisor" $ do
             rs <- for [1..10] $ \n -> do
@@ -503,17 +503,17 @@ spec = do
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             sv <- newTQueueIO
-            a <- async $ newSupervisor sv OneForOne def procs
-            rs1 <- for childQs $ \ch -> call def ch True
-            rs1 `shouldBe` Just <$> [1..10]
-            rs2 <- for childQs $ \ch -> call def ch True
-            rs2 `shouldBe` Just <$> [2..11]
-            for_ childQs $ \ch -> cast ch False
-            reports <- for childMons takeMVar
-            reports `shouldSatisfy` and . map ((==) Normal . fst)
-            threadDelay 1000
-            r <- poll a
-            r `shouldSatisfy` isNothing
+            withAsync (newSupervisor sv OneForOne def procs) $ \a -> do
+                rs1 <- for childQs $ \ch -> call def ch True
+                rs1 `shouldBe` Just <$> [1..10]
+                rs2 <- for childQs $ \ch -> call def ch True
+                rs2 `shouldBe` Just <$> [2..11]
+                for_ childQs $ \ch -> cast ch False
+                reports <- for childMons takeMVar
+                reports `shouldSatisfy` and . map ((==) Normal . fst)
+                threadDelay 1000
+                r <- poll a
+                r `shouldSatisfy` isNothing
 
         it "intensive crash of temporary child does not terminate Supervisor" $ do
             rs <- for [1..10] $ \n -> do
@@ -525,15 +525,15 @@ spec = do
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
             sv <- newTQueueIO
-            a <- async $ newSupervisor sv OneForOne def procs
-            rs1 <- for markers takeMVar
-            rs1 `shouldBe` replicate 10 ()
-            for_ triggers $ \t -> putMVar t ()
-            reports <- for childMons takeMVar
-            reports `shouldSatisfy` and . map ((==) UncaughtException . fst)
-            threadDelay 1000
-            r <- poll a
-            r `shouldSatisfy` isNothing
+            withAsync (newSupervisor sv OneForOne def procs) $ \a -> do
+                rs1 <- for markers takeMVar
+                rs1 `shouldBe` replicate 10 ()
+                for_ triggers $ \t -> putMVar t ()
+                reports <- for childMons takeMVar
+                reports `shouldSatisfy` and . map ((==) UncaughtException . fst)
+                threadDelay 1000
+                r <- poll a
+                r `shouldSatisfy` isNothing
 
         it "intensive kiling temporary child does not terminate Supervisor" $ do
             rs <- for [1..10] $ \n -> do
@@ -545,14 +545,14 @@ spec = do
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
             sv <- newTQueueIO
-            a <- async $ newSupervisor sv OneForOne def procs
-            tids <- for markers takeMVar
-            for_ tids killThread
-            reports <- for childMons takeMVar
-            reports `shouldSatisfy` and . map ((==) Killed . fst)
-            threadDelay 1000
-            r <- poll a
-            r `shouldSatisfy` isNothing
+            withAsync (newSupervisor sv OneForOne def procs) $ \a -> do
+                tids <- for markers takeMVar
+                for_ tids killThread
+                reports <- for childMons takeMVar
+                reports `shouldSatisfy` and . map ((==) Killed . fst)
+                threadDelay 1000
+                r <- poll a
+                r `shouldSatisfy` isNothing
 
         it "longer interval multiple normal exit of permanent child does not terminate Supervisor" $ do
             rs <- for [1..10] $ \n -> do
@@ -563,17 +563,17 @@ spec = do
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             sv <- newTQueueIO
-            a <- async $ newSupervisor sv OneForOne def { restartSensitivityPeriod = TimeSpec 0 1000 } procs
-            rs1 <- for childQs $ \ch -> call def ch True
-            rs1 `shouldBe` Just <$> [1..10]
-            rs2 <- for childQs $ \ch -> call def ch True
-            rs2 `shouldBe` Just <$> [2..11]
-            for_ childQs $ \ch -> threadDelay 1000 *> cast ch False
-            reports <- for childMons takeMVar
-            reports `shouldSatisfy` and . map ((==) Normal . fst)
-            threadDelay 1000
-            r <- poll a
-            r `shouldSatisfy` isNothing
+            withAsync (newSupervisor sv OneForOne def { restartSensitivityPeriod = TimeSpec 0 1000 } procs) $ \a -> do
+                rs1 <- for childQs $ \ch -> call def ch True
+                rs1 `shouldBe` Just <$> [1..10]
+                rs2 <- for childQs $ \ch -> call def ch True
+                rs2 `shouldBe` Just <$> [2..11]
+                for_ childQs $ \ch -> threadDelay 1000 *> cast ch False
+                reports <- for childMons takeMVar
+                reports `shouldSatisfy` and . map ((==) Normal . fst)
+                threadDelay 1000
+                r <- poll a
+                r `shouldSatisfy` isNothing
 
         it "longer interval multiple crash of transient child does not terminate Supervisor" $ do
             rs <- for [1..10] $ \n -> do
@@ -585,15 +585,15 @@ spec = do
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
             sv <- newTQueueIO
-            a <- async $ newSupervisor sv OneForOne def { restartSensitivityPeriod = TimeSpec 0 1000 } procs
-            rs1 <- for markers takeMVar
-            rs1 `shouldBe` replicate 10 ()
-            for_ triggers $ \t -> threadDelay 1000 *> putMVar t ()
-            reports <- for childMons takeMVar
-            reports `shouldSatisfy` and . map ((==) UncaughtException . fst)
-            threadDelay 1000
-            r <- poll a
-            r `shouldSatisfy` isNothing
+            withAsync (newSupervisor sv OneForOne def { restartSensitivityPeriod = TimeSpec 0 1000 } procs) $ \a -> do
+                rs1 <- for markers takeMVar
+                rs1 `shouldBe` replicate 10 ()
+                for_ triggers $ \t -> threadDelay 1000 *> putMVar t ()
+                reports <- for childMons takeMVar
+                reports `shouldSatisfy` and . map ((==) UncaughtException . fst)
+                threadDelay 1000
+                r <- poll a
+                r `shouldSatisfy` isNothing
 
         it "longer interval multiple killing transient child does not terminate Supervisor" $ do
             rs <- for [1..10] $ \n -> do
@@ -605,14 +605,14 @@ spec = do
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
             sv <- newTQueueIO
-            a <- async $ newSupervisor sv OneForOne def { restartSensitivityPeriod = TimeSpec 0 1000 } procs
-            tids <- for markers takeMVar
-            for_ tids $ \tid -> threadDelay 1000 *> killThread tid
-            reports <- for childMons takeMVar
-            reports `shouldSatisfy` and . map ((==) Killed . fst)
-            threadDelay 1000
-            r <- poll a
-            r `shouldSatisfy` isNothing
+            withAsync (newSupervisor sv OneForOne def { restartSensitivityPeriod = TimeSpec 0 1000 } procs) $ \a -> do
+                tids <- for markers takeMVar
+                for_ tids $ \tid -> threadDelay 1000 *> killThread tid
+                reports <- for childMons takeMVar
+                reports `shouldSatisfy` and . map ((==) Killed . fst)
+                threadDelay 1000
+                r <- poll a
+                r `shouldSatisfy` isNothing
 
     describe "One-for-all Supervisor with static childlen" $ do
         it "automatically starts children based on given ProcessSpec list" $ do
@@ -786,21 +786,21 @@ spec = do
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             sv <- newTQueueIO
-            a <- async $ newSupervisor sv OneForAll def procs
-            rs1 <- for childQs $ \ch -> call def ch True
-            rs1 `shouldBe` Just <$> [1,2]
-            rs2 <- for childQs $ \ch -> call def ch True
-            rs2 `shouldBe` Just <$> [2,3]
-            cast (head childQs) False
-            reports1 <- for childMons takeMVar
-            fst <$> reports1 `shouldBe` [Normal, Killed]
-            rs3 <- for childQs $ \ch -> call def ch True
-            rs3 `shouldBe` Just <$> [1,2]
-            cast (head childQs) False
-            reports2 <- for childMons takeMVar
-            fst <$> reports2 `shouldBe` [Normal, Killed]
-            r <- wait a
-            r `shouldBe` ()
+            withAsync (newSupervisor sv OneForAll def procs) $ \a -> do
+                rs1 <- for childQs $ \ch -> call def ch True
+                rs1 `shouldBe` Just <$> [1,2]
+                rs2 <- for childQs $ \ch -> call def ch True
+                rs2 `shouldBe` Just <$> [2,3]
+                cast (head childQs) False
+                reports1 <- for childMons takeMVar
+                fst <$> reports1 `shouldBe` [Normal, Killed]
+                rs3 <- for childQs $ \ch -> call def ch True
+                rs3 `shouldBe` Just <$> [1,2]
+                cast (head childQs) False
+                reports2 <- for childMons takeMVar
+                fst <$> reports2 `shouldBe` [Normal, Killed]
+                r <- wait a
+                r `shouldBe` ()
 
         it "intensive crash of permanent child causes termination of Supervisor itself" $ do
             rs <- for [1,2] $ \n -> do
@@ -812,20 +812,20 @@ spec = do
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
             sv <- newTQueueIO
-            a <- async $ newSupervisor sv OneForAll def procs
-            rs1 <- for markers takeMVar
-            rs1 `shouldBe` [(), ()]
-            putMVar (head triggers) ()
-            reports1 <- for childMons takeMVar
-            fst <$> reports1 `shouldBe` [UncaughtException, Killed]
-            threadDelay 1000
-            rs2 <- for markers takeMVar
-            rs2 `shouldBe` [(), ()]
-            putMVar (triggers !! 1) ()
-            reports2 <- for childMons takeMVar
-            fst <$> reports2 `shouldBe` [Killed, UncaughtException]
-            r <- wait a
-            r `shouldBe` ()
+            withAsync (newSupervisor sv OneForAll def procs) $ \a -> do
+                rs1 <- for markers takeMVar
+                rs1 `shouldBe` [(), ()]
+                putMVar (head triggers) ()
+                reports1 <- for childMons takeMVar
+                fst <$> reports1 `shouldBe` [UncaughtException, Killed]
+                threadDelay 1000
+                rs2 <- for markers takeMVar
+                rs2 `shouldBe` [(), ()]
+                putMVar (triggers !! 1) ()
+                reports2 <- for childMons takeMVar
+                fst <$> reports2 `shouldBe` [Killed, UncaughtException]
+                r <- wait a
+                r `shouldBe` ()
 
         it "intensive killing permanent child causes termination of Supervisor itself" $ do
             blocker <- newEmptyMVar
@@ -837,20 +837,20 @@ spec = do
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
             sv <- newTQueueIO
-            a <- async $ newSupervisor sv OneForAll def procs
-            tids <- for markers takeMVar
-            killThread $ head tids
-            reports1 <- for childMons takeMVar
-            fst <$> reports1 `shouldBe` [Killed, Killed]
-            threadDelay 1000
-            rs2 <- for markers isEmptyMVar
-            rs2 `shouldBe` [False, False]
-            tid2 <- takeMVar $ head markers
-            killThread tid2
-            reports2 <- for childMons takeMVar
-            fst <$> reports2 `shouldBe` [Killed, Killed]
-            r <- wait a
-            r `shouldBe` ()
+            withAsync (newSupervisor sv OneForAll def procs) $ \a -> do
+                tids <- for markers takeMVar
+                killThread $ head tids
+                reports1 <- for childMons takeMVar
+                fst <$> reports1 `shouldBe` [Killed, Killed]
+                threadDelay 1000
+                rs2 <- for markers isEmptyMVar
+                rs2 `shouldBe` [False, False]
+                tid2 <- takeMVar $ head markers
+                killThread tid2
+                reports2 <- for childMons takeMVar
+                fst <$> reports2 `shouldBe` [Killed, Killed]
+                r <- wait a
+                r `shouldBe` ()
 
         it "intensive normal exit of transient child does not terminate Supervisor" $ do
             rs <- for [1..10] $ \n -> do
@@ -861,17 +861,17 @@ spec = do
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             sv <- newTQueueIO
-            a <- async $ newSupervisor sv OneForAll def procs
-            rs1 <- for childQs $ \ch -> call def ch True
-            rs1 `shouldBe` Just <$> [1..10]
-            rs2 <- for childQs $ \ch -> call def ch True
-            rs2 `shouldBe` Just <$> [2..11]
-            for_ childQs $ \ch -> cast ch False
-            reports <- for childMons takeMVar
-            reports `shouldSatisfy` and . map ((==) Normal . fst)
-            threadDelay 1000
-            r <- poll a
-            r `shouldSatisfy` isNothing
+            withAsync (newSupervisor sv OneForAll def procs) $ \a -> do
+                rs1 <- for childQs $ \ch -> call def ch True
+                rs1 `shouldBe` Just <$> [1..10]
+                rs2 <- for childQs $ \ch -> call def ch True
+                rs2 `shouldBe` Just <$> [2..11]
+                for_ childQs $ \ch -> cast ch False
+                reports <- for childMons takeMVar
+                reports `shouldSatisfy` and . map ((==) Normal . fst)
+                threadDelay 1000
+                r <- poll a
+                r `shouldSatisfy` isNothing
 
         it "intensive crash of transient child causes termination of Supervisor itself" $ do
             rs <- for [1,2] $ \n -> do
@@ -883,20 +883,20 @@ spec = do
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
             sv <- newTQueueIO
-            a <- async $ newSupervisor sv OneForAll def procs
-            rs1 <- for markers takeMVar
-            rs1 `shouldBe` [(), ()]
-            putMVar (head triggers) ()
-            reports1 <- for childMons takeMVar
-            fst <$> reports1 `shouldBe` [UncaughtException, Killed]
-            threadDelay 1000
-            rs2 <- for markers takeMVar
-            rs2 `shouldBe` [(), ()]
-            putMVar (triggers !! 1) ()
-            reports2 <- for childMons takeMVar
-            fst <$> reports2 `shouldBe` [Killed, UncaughtException]
-            r <- wait a
-            r `shouldBe` ()
+            withAsync (newSupervisor sv OneForAll def procs) $ \a -> do
+                rs1 <- for markers takeMVar
+                rs1 `shouldBe` [(), ()]
+                putMVar (head triggers) ()
+                reports1 <- for childMons takeMVar
+                fst <$> reports1 `shouldBe` [UncaughtException, Killed]
+                threadDelay 1000
+                rs2 <- for markers takeMVar
+                rs2 `shouldBe` [(), ()]
+                putMVar (triggers !! 1) ()
+                reports2 <- for childMons takeMVar
+                fst <$> reports2 `shouldBe` [Killed, UncaughtException]
+                r <- wait a
+                r `shouldBe` ()
 
         it "intensive killing transient child causes termination of Supervisor itself" $ do
             blocker <- newEmptyMVar
@@ -908,20 +908,20 @@ spec = do
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
             sv <- newTQueueIO
-            a <- async $ newSupervisor sv OneForAll def procs
-            tids1 <- for markers takeMVar
-            killThread $ head tids1
-            reports1 <- for childMons takeMVar
-            fst <$> reports1 `shouldBe` [Killed, Killed]
-            threadDelay 1000
-            rs2 <- for markers isEmptyMVar
-            rs2 `shouldBe` [False, False]
-            tids2 <- for markers takeMVar
-            killThread $ tids2 !! 1
-            reports2 <- for childMons takeMVar
-            fst <$> reports2 `shouldBe` [Killed, Killed]
-            r <- wait a
-            r `shouldBe` ()
+            withAsync (newSupervisor sv OneForAll def procs) $ \a -> do
+                tids1 <- for markers takeMVar
+                killThread $ head tids1
+                reports1 <- for childMons takeMVar
+                fst <$> reports1 `shouldBe` [Killed, Killed]
+                threadDelay 1000
+                rs2 <- for markers isEmptyMVar
+                rs2 `shouldBe` [False, False]
+                tids2 <- for markers takeMVar
+                killThread $ tids2 !! 1
+                reports2 <- for childMons takeMVar
+                fst <$> reports2 `shouldBe` [Killed, Killed]
+                r <- wait a
+                r `shouldBe` ()
 
         it "intensive normal exit of temporary child does not terminate Supervisor" $ do
             rs <- for [1..10] $ \n -> do
@@ -932,17 +932,17 @@ spec = do
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             sv <- newTQueueIO
-            a <- async $ newSupervisor sv OneForAll def procs
-            rs1 <- for childQs $ \ch -> call def ch True
-            rs1 `shouldBe` Just <$> [1..10]
-            rs2 <- for childQs $ \ch -> call def ch True
-            rs2 `shouldBe` Just <$> [2..11]
-            for_ childQs $ \ch -> cast ch False
-            reports <- for childMons takeMVar
-            reports `shouldSatisfy` and . map ((==) Normal . fst)
-            threadDelay 1000
-            r <- poll a
-            r `shouldSatisfy` isNothing
+            withAsync (newSupervisor sv OneForAll def procs) $ \a -> do
+                rs1 <- for childQs $ \ch -> call def ch True
+                rs1 `shouldBe` Just <$> [1..10]
+                rs2 <- for childQs $ \ch -> call def ch True
+                rs2 `shouldBe` Just <$> [2..11]
+                for_ childQs $ \ch -> cast ch False
+                reports <- for childMons takeMVar
+                reports `shouldSatisfy` and . map ((==) Normal . fst)
+                threadDelay 1000
+                r <- poll a
+                r `shouldSatisfy` isNothing
 
         it "intensive crash of temporary child does not terminate Supervisor" $ do
             rs <- for [1..10] $ \n -> do
@@ -954,15 +954,15 @@ spec = do
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
             sv <- newTQueueIO
-            a <- async $ newSupervisor sv OneForAll def procs
-            rs1 <- for markers takeMVar
-            rs1 `shouldBe` replicate 10 ()
-            for_ triggers $ \t -> putMVar t ()
-            reports <- for childMons takeMVar
-            reports `shouldSatisfy` and . map ((==) UncaughtException . fst)
-            threadDelay 1000
-            r <- poll a
-            r `shouldSatisfy` isNothing
+            withAsync(newSupervisor sv OneForAll def procs) $ \a -> do
+                rs1 <- for markers takeMVar
+                rs1 `shouldBe` replicate 10 ()
+                for_ triggers $ \t -> putMVar t ()
+                reports <- for childMons takeMVar
+                reports `shouldSatisfy` and . map ((==) UncaughtException . fst)
+                threadDelay 1000
+                r <- poll a
+                r `shouldSatisfy` isNothing
 
         it "intensive kiling temporary child does not terminate Supervisor" $ do
             rs <- for [1..10] $ \n -> do
@@ -974,14 +974,14 @@ spec = do
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
             sv <- newTQueueIO
-            a <- async $ newSupervisor sv OneForAll def procs
-            tids <- for markers takeMVar
-            for_ tids killThread
-            reports <- for childMons takeMVar
-            reports `shouldSatisfy` and . map ((==) Killed . fst)
-            threadDelay 1000
-            r <- poll a
-            r `shouldSatisfy` isNothing
+            withAsync (newSupervisor sv OneForAll def procs) $ \a -> do
+                tids <- for markers takeMVar
+                for_ tids killThread
+                reports <- for childMons takeMVar
+                reports `shouldSatisfy` and . map ((==) Killed . fst)
+                threadDelay 1000
+                r <- poll a
+                r `shouldSatisfy` isNothing
 
         it "longer interval multiple normal exit of permanent child does not terminate Supervisor" $ do
             rs <- for [1..10] $ \n -> do
@@ -990,17 +990,17 @@ spec = do
                 pure (childQ, process)
             let (childQs, procs) = unzip rs
             sv <- newTQueueIO
-            a <- async $ newSupervisor sv OneForAll def { restartSensitivityPeriod = TimeSpec 0 1000 } procs
-            rs1 <- for childQs $ \ch -> call def ch True
-            rs1 `shouldBe` Just <$> [1..10]
-            rs2 <- for childQs $ \ch -> call def ch True
-            rs2 `shouldBe` Just <$> [2..11]
-            for_ childQs $ \ch -> threadDelay 1000 *> cast ch False
-            threadDelay 1000
-            r <- poll a
-            r `shouldSatisfy` isNothing
-            rs1 <- for childQs $ \ch -> call def ch True
-            rs1 `shouldBe` Just <$> [1..10]
+            withAsync (newSupervisor sv OneForAll def { restartSensitivityPeriod = TimeSpec 0 1000 } procs) $ \a -> do
+                rs1 <- for childQs $ \ch -> call def ch True
+                rs1 `shouldBe` Just <$> [1..10]
+                rs2 <- for childQs $ \ch -> call def ch True
+                rs2 `shouldBe` Just <$> [2..11]
+                for_ childQs $ \ch -> threadDelay 1000 *> cast ch False
+                threadDelay 1000
+                r <- poll a
+                r `shouldSatisfy` isNothing
+                rs1 <- for childQs $ \ch -> call def ch True
+                rs1 `shouldBe` Just <$> [1..10]
 
         it "longer interval multiple crash of transient child does not terminate Supervisor" $ do
             rs <- for [1..10] $ \n -> do
@@ -1010,17 +1010,17 @@ spec = do
                 pure (marker, trigger, process)
             let (markers, triggers, procs) = unzip3 rs
             sv <- newTQueueIO
-            a <- async $ newSupervisor sv OneForAll def { restartSensitivityPeriod = TimeSpec 0 1000 } procs
-            threadDelay 1000
-            rs1 <- for markers readTVarIO
-            rs1 `shouldBe` replicate 10 True
-            rs1 <- for markers $ \m -> atomically $ writeTVar m True
-            for_ triggers $ \t -> threadDelay 1000 *> putMVar t ()
-            threadDelay 1000
-            r <- poll a
-            r `shouldSatisfy` isNothing
-            rs1 <- for markers readTVarIO
-            rs1 `shouldBe` replicate 10 True
+            withAsync (newSupervisor sv OneForAll def { restartSensitivityPeriod = TimeSpec 0 1000 } procs) $ \a -> do
+                threadDelay 1000
+                rs1 <- for markers readTVarIO
+                rs1 `shouldBe` replicate 10 True
+                rs1 <- for markers $ \m -> atomically $ writeTVar m True
+                for_ triggers $ \t -> threadDelay 1000 *> putMVar t ()
+                threadDelay 1000
+                r <- poll a
+                r `shouldSatisfy` isNothing
+                rs1 <- for markers readTVarIO
+                rs1 `shouldBe` replicate 10 True
 
         it "longer interval multiple killing transient child does not terminate Supervisor" $ do
             myTid <- myThreadId
@@ -1031,13 +1031,13 @@ spec = do
                 pure (marker, process)
             let (markers, procs) = unzip rs
             sv <- newTQueueIO
-            a <- async $ newSupervisor sv OneForAll def procs
-            threadDelay 10000
-            tids <- for markers readTVarIO
-            tids `shouldSatisfy` not . elem myTid
-            for_ tids killThread
-            threadDelay 1000
-            r <- poll a
-            r `shouldSatisfy` isNothing
-            tids <- for markers readTVarIO
-            tids `shouldSatisfy` not . elem myTid
+            withAsync (newSupervisor sv OneForAll def procs) $ \a -> do
+                threadDelay 10000
+                tids <- for markers readTVarIO
+                tids `shouldSatisfy` not . elem myTid
+                for_ tids killThread
+                threadDelay 1000
+                r <- poll a
+                r `shouldSatisfy` isNothing
+                tids <- for markers readTVarIO
+                tids `shouldSatisfy` not . elem myTid
