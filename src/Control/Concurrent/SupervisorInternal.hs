@@ -55,7 +55,8 @@ type MessageQueue a = TQueue a
 
     'newStateMachine' returns an IO action wrapping the state machine described above.
     The returned IO action can be executed within an 'Async' or bare thread.
-    Note that the IO action is designed to run in separate thread from main thread.
+
+    Created IO action is designed to run in separate thread from main thread.
     If you try to run the IO action at main thread without having producer of the message queue you gave,
     the state machine will dead lock.
 -}
@@ -171,7 +172,7 @@ data Restart
 data ExitReason
     = Normal                -- ^ Thread was normally finished.
     | UncaughtException     -- ^ A synchronous exception was thrown and it was not caught.
-                            --   This indicates some unhandled error was happen inside of the thread handler.
+                            --   This indicates some unhandled error happened inside of the thread handler.
     | Killed                -- ^ An asynchronous exception was thrown.
                             --   This also happen when the thread was killed by supervisor.
     deriving (Eq, Show)
@@ -216,7 +217,7 @@ newProcessMap :: IO ProcessMap
 newProcessMap = newIORef empty
 
 {-|
-    Starting new thread based on given 'ProcessSpec', register the thread to given 'ProcessMap'
+    Start new thread based on given 'ProcessSpec', register the thread to given 'ProcessMap'
     then returns 'Async' of the thread.
 -}
 newProcess
@@ -250,20 +251,47 @@ instance Default RestartSensitivity where
 
 newtype RestartHist = RestartHist (DelayedQueue TimeSpec) deriving (Eq, Show)
 
-newRestartHist :: Int -> RestartHist
+-- | Create a 'RestartHist' with maximum allowed restart embedded as delay of 'DelayedQueue'.
+newRestartHist
+    :: Int          -- ^ Restart intensity (maximum number of restart allowed before supervisor terminates).
+    -> RestartHist
 newRestartHist = RestartHist . newEmptyDelayedQueue
 
+-- | Get current system timestamp in 'Monotonic' form.
 getCurrentTime :: IO TimeSpec
 getCurrentTime = getTime Monotonic
 
-isRestartIntense :: TimeSpec -> TimeSpec -> RestartHist -> (Bool, RestartHist)
+{-|
+    Determine if the last restart results intensive restart.
+    It pushes the last restart timestamp to the 'DelayedQueue' inside of the restart history
+    then check if the oldest restart record is pushed out from the queue.
+    If no record was pushed out, there are less number of restarts than limit, so it is not intensive.
+    If a record was pushed out, it means we had one more restarts than allowed.
+    If the oldest restart and newest restart happened within allowed time interval, it is intensive.
+
+    This function implements pure part of 'isRestartIntenseNow'.
+-}
+isRestartIntense
+    :: TimeSpec             -- ^ Restart period (time window where multiple restarts within it are considered as intensive).
+    -> TimeSpec             -- ^ System timestamp in 'Monotonic' form when the last restart was triggered.
+    -> RestartHist          -- ^ History of past restart with maximum allowed restarts are delayed to appear in its front.
+    -> (Bool, RestartHist)  -- ^ Returns 'True' if intensive restart is happening.
+                            --   Returns new history of restart which has the oldest history removed if possible.
 isRestartIntense maxT lastRestart (RestartHist dq) =
     let histWithLastRestart = push lastRestart dq
     in case pop histWithLastRestart of
         Nothing                         ->  (False, RestartHist histWithLastRestart)
         Just (oldestRestart, nextHist)  ->  (lastRestart - oldestRestart <= maxT, RestartHist nextHist)
 
-isRestartIntenseNow :: TimeSpec -> RestartHist -> IO (Bool, RestartHist)
+{-|
+    Determine if intensive restart is happening now.
+    It is called when restart is triggered by some thread termination.
+-}
+isRestartIntenseNow
+    :: TimeSpec                 -- ^ Restart period (time window where multiple restarts within it are considered as intensive).
+    -> RestartHist              -- ^ History of past restart with maximum allowed restarts are delayed to appear in its front.
+    -> IO (Bool, RestartHist)   -- ^ Returns 'True' if intensive restart is happening.
+                                --   Returns new history of restart which has the oldest history removed if possible.
 isRestartIntenseNow maxT restartHist = do
     currentTime <- getCurrentTime
     pure $ isRestartIntense maxT currentTime restartHist
@@ -271,15 +299,18 @@ isRestartIntenseNow maxT restartHist = do
 {-
     Supervisor
 -}
-data SupervisorCommand
-    = Down ExitReason ThreadId
-    | StartChild ProcessSpec (TMVar (Async ()))
 
-type SupervisorQueue = TQueue SupervisorCommand
+-- | 'SupervisorMessage' defines all message types supervisor can receive.
+data SupervisorMessage
+    = Down ExitReason ThreadId                  -- ^ Notification of child thread termination.
+    | StartChild ProcessSpec (TMVar (Async ())) -- ^ Command to start a new supervised thread.
+
+type SupervisorQueue = TQueue SupervisorMessage
 
 -- newSupervisorQueue :: IO SupervisorQueue
 -- newSupervisorQueue = newTQueueIO
 
+-- | Start a new thread with supervision.
 newSupervisedProcess
     :: SupervisorQueue  -- ^ Inbox message queue of the supervisor.
     -> ProcessMap       -- ^ Map of current live processes which the supervisor monitors.
@@ -290,6 +321,7 @@ newSupervisedProcess inbox procMap procSpec =
       where
         monitor reason tid = atomically $ writeTQueue inbox (Down reason tid)
 
+-- | Start all given 'ProcessSpec' on new thread each with supervision.
 startAllSupervisedProcess
     :: SupervisorQueue  -- ^ Inbox message queue of the supervisor.
     -> ProcessMap       -- ^ Map of current live processes which the supervisor monitors.
@@ -297,6 +329,7 @@ startAllSupervisedProcess
     -> IO ()
 startAllSupervisedProcess inbox procMap = traverse_ $ newSupervisedProcess inbox procMap
 
+-- | Kill all running threads supervised by the supervisor represented by 'SupervisorQueue'.
 killAllSupervisedProcess :: SupervisorQueue -> ProcessMap -> IO ()
 killAllSupervisedProcess inbox procMap = uninterruptibleMask_ $ do
     pmap <- readIORef procMap
@@ -312,12 +345,38 @@ killAllSupervisedProcess inbox procMap = uninterruptibleMask_ $ do
 
 data Strategy = OneForOne | OneForAll
 
+{-|
+    Create a supervisor with 'OneForOne' restart strategy and has no static 'ProcessSpec'.
+    When it started, it has no child threads.  Only 'newChild' can add new thread supervised by the supervisor.
+    Thus the simple one-for-one supervisor only manages dynamic and 'Temporary' children.
+-}
 newSimpleOneForOneSupervisor :: SupervisorQueue -> IO ()
 newSimpleOneForOneSupervisor inbox = newSupervisor inbox OneForOne def []
 
+{-|
+    Create a supervisor.
+
+    When created supervisor IO action started, it automatically creates child threads based on given 'ProcessSpec'
+    list and supervise them.  After it created such static children, it listens given 'SupervisorQueue'.
+    User can let the supervisor creates dynamic child thread by calling 'newChild'.  Dynamic child threads
+    created by 'newChild' are also supervised.
+
+    When the supervisor thread is killed or terminated in some reason, all children including static children
+    and dynamic children are all killed.
+
+    With 'OneForOne' restart strategy, when a child thread terminated, it is restarted based on its restart type
+    given in 'ProcessSpec'.  If the terminated thread has 'Permanent' restart type, supervisor restarts it
+    regardless its exit reason.  If the terminated thread has 'Transient' restart type, and termination reason
+    is other than 'Normal' (meaning 'UncaughtException' or 'Killed'), it is restarted.  If the terminated thread
+    has 'Temporary' restart type, supervisor does not restart it regardless its exit reason.
+
+    Created IO action is designed to run in separate thread from main thread.
+    If you try to run the IO action at main thread without having producer of the supervisor queue you gave,
+    the state machine will dead lock.
+-}
 newSupervisor
     :: SupervisorQueue      -- ^ Inbox message queue of the supervisor.
-    -> Strategy             -- ^ Restarting strategy of monitored processes.
+    -> Strategy             -- ^ Restarting strategy of monitored processes.  'OneForOne' or 'OneForAll'.
     -> RestartSensitivity   -- ^ Restart intensity sensitivity in restart count and period.
     -> [ProcessSpec]        -- ^ List of supervised process specifications.
     -> IO ()
@@ -325,13 +384,13 @@ newSupervisor inbox strategy (RestartSensitivity maxR maxT) procSpecs = bracket 
   where
     initSupervisor procMap = do
         startAllSupervisedProcess inbox procMap procSpecs
-        newStateMachine inbox (newRestartHist maxR) supervisorCommandHandler
+        newStateMachine inbox (newRestartHist maxR) supervisorMessageHandler
       where
         restartChild OneForOne procMap spec = void $ newSupervisedProcess inbox procMap spec
         restartChild OneForAll procMap _    = killAllSupervisedProcess inbox procMap *> startAllSupervisedProcess inbox procMap procSpecs
 
-        supervisorCommandHandler :: RestartHist -> SupervisorCommand -> IO (Either () RestartHist)
-        supervisorCommandHandler hist (Down reason tid) = do
+        supervisorMessageHandler :: RestartHist -> SupervisorMessage -> IO (Either () RestartHist)
+        supervisorMessageHandler hist (Down reason tid) = do
             pmap <- readIORef procMap
             processRestart $ snd <$> lookup tid pmap
           where
@@ -352,7 +411,7 @@ newSupervisor inbox strategy (RestartSensitivity maxR maxT) procSpecs = bracket 
             restartNeeded Transient Normal = False
             restartNeeded _         _      = True
 
-        supervisorCommandHandler hist (StartChild (ProcessSpec monitors _ proc) callRet) = do
+        supervisorMessageHandler hist (StartChild (ProcessSpec monitors _ proc) callRet) = do
             a <- newSupervisedProcess inbox procMap (ProcessSpec monitors Temporary proc)
             atomically $ putTMVar callRet a
             pure $ Right hist
