@@ -10,11 +10,12 @@ import           Data.Typeable                 (typeOf)
 import           System.Clock                  (Clock (Monotonic),
                                                 TimeSpec (..), getTime,
                                                 toNanoSecs)
-import           UnliftIO                      (async, asyncThreadId,
-                                                atomically, cancel, isEmptyMVar,
-                                                newEmptyMVar, newTQueueIO,
-                                                newTVarIO, poll, putMVar,
-                                                readMVar, readTQueue,
+import           UnliftIO                      (StringException (..), async,
+                                                asyncThreadId, atomically,
+                                                cancel, fromException,
+                                                isEmptyMVar, newEmptyMVar,
+                                                newTQueueIO, newTVarIO, poll,
+                                                putMVar, readMVar, readTQueue,
                                                 readTVarIO, takeMVar,
                                                 throwString, wait, withAsync,
                                                 writeTQueue, writeTVar)
@@ -24,6 +25,17 @@ import           UnliftIO.Concurrent           (ThreadId, killThread,
 import           Test.Hspec
 
 import           Control.Concurrent.Supervisor
+
+instance Eq ExitReason where
+    (UncaughtException e) == _  = error "should not compare exception by Eq"
+    _ == (UncaughtException e)  = error "should not compare exception by Eq"
+    Normal == Normal            = True
+    Killed == Killed            = True
+    _ == _                      = False
+
+reasonToString :: ExitReason -> String
+reasonToString  (UncaughtException e) = toStr $ fromException e
+  where toStr (Just (StringException str _)) = str
 
 data ConstServerMessage = AskFst | AskSnd
 
@@ -284,7 +296,7 @@ spec = do
                 rs1 `shouldBe` [(), ()]
                 for_ triggers $ \t -> putMVar t ()
                 reports <- for childMons takeMVar
-                reports `shouldSatisfy` and . map ((==) UncaughtException . fst)
+                reports `shouldSatisfy` and . map ((==) "oops" . reasonToString . fst)
                 threadDelay 1000
                 rs <- for markers $  \m -> isEmptyMVar m
                 rs `shouldBe` [False, True]
@@ -386,13 +398,13 @@ spec = do
                 rs1 `shouldBe` [(), ()]
                 putMVar (head triggers) ()
                 report1 <- takeMVar $ head childMons
-                fst report1 `shouldBe` UncaughtException
+                report1 `shouldSatisfy` ((==) "oops" . reasonToString . fst)
                 threadDelay 1000
                 rs2 <- takeMVar $ head markers
                 rs2 `shouldBe` ()
                 putMVar (triggers !! 1) ()
                 report2 <- takeMVar $ childMons !! 1
-                fst report2 `shouldBe` UncaughtException
+                report2 `shouldSatisfy` ((==) "oops" . reasonToString . fst)
                 r <- wait a
                 r `shouldBe` ()
 
@@ -457,13 +469,13 @@ spec = do
                 rs1 `shouldBe` [(), ()]
                 putMVar (head triggers) ()
                 report1 <- takeMVar $ head childMons
-                fst report1 `shouldBe` UncaughtException
+                report1 `shouldSatisfy` ((==) "oops" . reasonToString . fst)
                 threadDelay 1000
                 rs2 <- takeMVar $ head markers
                 rs2 `shouldBe` ()
                 putMVar (triggers !! 1) ()
                 report2 <- takeMVar $ childMons !! 1
-                fst report2 `shouldBe` UncaughtException
+                report2 `shouldSatisfy` ((==) "oops" . reasonToString . fst)
                 r <- wait a
                 r `shouldBe` ()
 
@@ -528,7 +540,7 @@ spec = do
                 rs1 `shouldBe` replicate 10 ()
                 for_ triggers $ \t -> putMVar t ()
                 reports <- for childMons takeMVar
-                reports `shouldSatisfy` and . map ((==) UncaughtException . fst)
+                reports `shouldSatisfy` and . map ((==) "oops" . reasonToString . fst)
                 threadDelay 1000
                 r <- poll a
                 r `shouldSatisfy` isNothing
@@ -588,7 +600,7 @@ spec = do
                 rs1 `shouldBe` replicate 10 ()
                 for_ triggers $ \t -> threadDelay 1000 *> putMVar t ()
                 reports <- for childMons takeMVar
-                reports `shouldSatisfy` and . map ((==) UncaughtException . fst)
+                reports `shouldSatisfy` and . map ((==) "oops" . reasonToString . fst)
                 threadDelay 1000
                 r <- poll a
                 r `shouldSatisfy` isNothing
@@ -690,7 +702,8 @@ spec = do
                 rs1 <- for markers takeMVar
                 putMVar (head triggers) ()
                 reports <- for childMons takeMVar
-                fst <$> reports `shouldBe` [UncaughtException, Killed]
+                fst (reports !! 0) `shouldSatisfy` ((==) "oops" . reasonToString)
+                fst (reports !! 1) `shouldBe` Killed
                 threadDelay 1000
                 tids <- for markers takeMVar
                 killThread $ head tids
@@ -716,7 +729,7 @@ spec = do
                 rs1 `shouldBe` [(), ()]
                 putMVar (triggers !! 1) ()
                 (reason, _) <- takeMVar $ childMons !! 1
-                reason `shouldBe` UncaughtException
+                reason `shouldSatisfy` ((==) "oops" . reasonToString)
                 threadDelay 1000
                 rs2 <- for markers isEmptyMVar
                 rs2 `shouldBe` [True, True]
@@ -815,13 +828,15 @@ spec = do
                 rs1 `shouldBe` [(), ()]
                 putMVar (head triggers) ()
                 reports1 <- for childMons takeMVar
-                fst <$> reports1 `shouldBe` [UncaughtException, Killed]
+                fst (reports1 !! 0) `shouldSatisfy` ((==) "oops" . reasonToString)
+                fst (reports1 !! 1) `shouldBe` Killed
                 threadDelay 1000
                 rs2 <- for markers takeMVar
                 rs2 `shouldBe` [(), ()]
                 putMVar (triggers !! 1) ()
                 reports2 <- for childMons takeMVar
-                fst <$> reports2 `shouldBe` [Killed, UncaughtException]
+                fst (reports2 !! 0) `shouldBe` Killed
+                fst (reports2 !! 1) `shouldSatisfy` ((==) "oops" . reasonToString)
                 r <- wait a
                 r `shouldBe` ()
 
@@ -886,13 +901,15 @@ spec = do
                 rs1 `shouldBe` [(), ()]
                 putMVar (head triggers) ()
                 reports1 <- for childMons takeMVar
-                fst <$> reports1 `shouldBe` [UncaughtException, Killed]
+                fst (reports1 !! 0) `shouldSatisfy` ((==) "oops" . reasonToString)
+                fst (reports1 !! 1) `shouldBe` Killed
                 threadDelay 1000
                 rs2 <- for markers takeMVar
                 rs2 `shouldBe` [(), ()]
                 putMVar (triggers !! 1) ()
                 reports2 <- for childMons takeMVar
-                fst <$> reports2 `shouldBe` [Killed, UncaughtException]
+                fst (reports2 !! 0) `shouldBe` Killed
+                fst (reports2 !! 1) `shouldSatisfy` ((==) "oops" . reasonToString)
                 r <- wait a
                 r `shouldBe` ()
 
@@ -957,7 +974,7 @@ spec = do
                 rs1 `shouldBe` replicate 10 ()
                 for_ triggers $ \t -> putMVar t ()
                 reports <- for childMons takeMVar
-                reports `shouldSatisfy` and . map ((==) UncaughtException . fst)
+                reports `shouldSatisfy` and . map ((==) "oops" . reasonToString . fst)
                 threadDelay 1000
                 r <- poll a
                 r `shouldSatisfy` isNothing

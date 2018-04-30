@@ -1,4 +1,3 @@
-{-# LANGUAGE ScopedTypeVariables #-}
 {-|
 Module      : Control.Concurrent.SupervisorInternal
 Copyright   : (c) Naoto Shimazaki 2018
@@ -166,12 +165,12 @@ data Restart
 
 -- | 'ExitReason' indicates reason of thread termination.
 data ExitReason
-    = Normal                -- ^ Thread was normally finished.
-    | UncaughtException     -- ^ A synchronous exception was thrown and it was not caught.
-                            --   This indicates some unhandled error happened inside of the thread handler.
-    | Killed                -- ^ An asynchronous exception was thrown.
-                            --   This also happen when the thread was killed by supervisor.
-    deriving (Eq, Show)
+    = Normal                            -- ^ Thread was normally finished.
+    | UncaughtException SomeException   -- ^ A synchronous exception was thrown and it was not caught.
+                                        --   This indicates some unhandled error happened inside of the thread handler.
+    | Killed                            -- ^ An asynchronous exception was thrown.
+                                        --   This also happen when the thread was killed by supervisor.
+    deriving (Show)
 
 -- | 'Monitor' is user supplied callback function which is called when monitored thread is terminated.
 type Monitor
@@ -223,7 +222,7 @@ newProcess
 newProcess procMap procSpec@(ProcessSpec monitors _ action) = mask_ $ do
     reason <- newIORef Killed
     a <- asyncWithUnmask $ \unmask ->
-        ((unmask action *> writeIORef reason Normal) `catch` (\(e :: SomeException) -> writeIORef reason UncaughtException))
+        ((unmask action *> writeIORef reason Normal) `catch` (writeIORef reason . UncaughtException))
         `finally` (readIORef reason >>= notify monitors)
     modifyIORef' procMap $ insert (asyncThreadId a) (a, procSpec)
     pure a

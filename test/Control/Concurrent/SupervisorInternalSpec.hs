@@ -8,8 +8,10 @@ import           Data.Maybe                            (fromJust, isJust,
 import           Data.Traversable                      (for)
 import           System.Clock                          (TimeSpec (..),
                                                         fromNanoSecs)
-import           UnliftIO                              (asyncThreadId,
+import           UnliftIO                              (StringException (..),
+                                                        asyncThreadId,
                                                         atomically, cancel,
+                                                        fromException,
                                                         newEmptyMVar,
                                                         newTQueueIO, putMVar,
                                                         readMVar, readTQueue,
@@ -20,6 +22,17 @@ import           UnliftIO                              (asyncThreadId,
 import           Test.Hspec
 
 import           Control.Concurrent.SupervisorInternal
+
+instance Eq ExitReason where
+    (UncaughtException e) == _  = error "should not compare exception by Eq"
+    _ == (UncaughtException e)  = error "should not compare exception by Eq"
+    Normal == Normal            = True
+    Killed == Killed            = True
+    _ == _                      = False
+
+reasonToString :: ExitReason -> String
+reasonToString  (UncaughtException e) = toStr $ fromException e
+  where toStr (Just (StringException str _)) = str
 
 spec :: Spec
 spec = do
@@ -111,8 +124,9 @@ spec = do
             noReport <- atomically $ tryReadTQueue sv
             noReport `shouldSatisfy` isNothing
             putMVar trigger ()
-            report <- atomically $ readTQueue sv
-            report `shouldBe` (UncaughtException, asyncThreadId a)
+            (reason, tid) <- atomically $ readTQueue sv
+            tid `shouldBe` asyncThreadId a
+            reasonToString reason `shouldBe` "oops"
 
         it "reports exit code Killed when it received asynchronous exception" $ do
             blocker <- newEmptyMVar
@@ -154,8 +168,9 @@ spec = do
                 noReport `shouldSatisfy` isNothing
             putMVar trigger ()
             for_ svs $ \sv -> do
-                report <- atomically $ readTQueue sv
-                report `shouldBe` (UncaughtException, asyncThreadId a)
+                (reason, tid) <- atomically $ readTQueue sv
+                tid `shouldBe` asyncThreadId a
+                reasonToString reason `shouldBe` "oops"
 
         it "can notify its exit by asynchronous exception to multiple monitors" $ do
             blocker <- newEmptyMVar
