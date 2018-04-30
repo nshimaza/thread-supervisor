@@ -29,8 +29,8 @@ library:
   - clock
   - containers
   - data-default
-  - safe-exceptions
   - stm
+  - unliftio
 
 executables:
   async-supervisor-exe:
@@ -56,7 +56,7 @@ tests:
     - clock
     - data-default
     - stm
-    - safe-exceptions
+    - unliftio
     - hspec
     - QuickCheck
     - async-supervisor

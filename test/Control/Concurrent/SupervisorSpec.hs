@@ -1,17 +1,5 @@
 module Control.Concurrent.SupervisorSpec where
 
-import           Control.Concurrent            (ThreadId, killThread,
-                                                myThreadId, threadDelay)
-import           Control.Concurrent.Async      (async, asyncThreadId, cancel,
-                                                poll, wait, withAsync)
-import           Control.Concurrent.MVar       (isEmptyMVar, newEmptyMVar,
-                                                putMVar, readMVar, takeMVar)
-import           Control.Concurrent.STM.TQueue (newTQueueIO, readTQueue,
-                                                tryReadTQueue, writeTQueue)
-import           Control.Concurrent.STM.TVar   (newTVarIO, readTVarIO,
-                                                writeTVar)
-import           Control.Exception.Safe        (bracket, throwString)
-import           Control.Monad.STM             (atomically)
 import           Data.Default                  (def)
 import           Data.Foldable                 (for_)
 import           Data.Functor                  (($>))
@@ -22,6 +10,16 @@ import           Data.Typeable                 (typeOf)
 import           System.Clock                  (Clock (Monotonic),
                                                 TimeSpec (..), getTime,
                                                 toNanoSecs)
+import           UnliftIO                      (async, asyncThreadId,
+                                                atomically, cancel, isEmptyMVar,
+                                                newEmptyMVar, newTQueueIO,
+                                                newTVarIO, poll, putMVar,
+                                                readMVar, readTQueue,
+                                                readTVarIO, takeMVar,
+                                                throwString, wait, withAsync,
+                                                writeTQueue, writeTVar)
+import           UnliftIO.Concurrent           (ThreadId, killThread,
+                                                myThreadId, threadDelay)
 
 import           Test.Hspec
 

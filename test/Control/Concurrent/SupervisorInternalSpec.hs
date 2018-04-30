@@ -1,20 +1,21 @@
 module Control.Concurrent.SupervisorInternalSpec where
 
-import           Control.Concurrent.Async      (async, asyncThreadId, cancel,
-                                                poll, wait, withAsync)
-import           Control.Concurrent.MVar       (isEmptyMVar, newEmptyMVar,
-                                                putMVar, readMVar, takeMVar)
-import           Control.Concurrent.STM.TQueue (newTQueueIO, readTQueue,
-                                                tryReadTQueue, writeTQueue)
-import           Control.Exception.Safe        (bracket, throwString)
-import           Control.Monad.STM             (atomically)
 import           Data.Default                          (def)
-import           Data.Foldable                 (for_)
-import           Data.Functor                  (($>))
-import           Data.Maybe                    (fromJust, isJust, isNothing)
-import           Data.Traversable              (for)
+import           Data.Foldable                         (for_)
+import           Data.Functor                          (($>))
+import           Data.Maybe                            (fromJust, isJust,
+                                                        isNothing)
+import           Data.Traversable                      (for)
 import           System.Clock                          (TimeSpec (..),
                                                         fromNanoSecs)
+import           UnliftIO                              (asyncThreadId,
+                                                        atomically, cancel,
+                                                        newEmptyMVar,
+                                                        newTQueueIO, putMVar,
+                                                        readMVar, readTQueue,
+                                                        throwString,
+                                                        tryReadTQueue,
+                                                        writeTQueue)
 
 import           Test.Hspec
 

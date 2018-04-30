@@ -12,34 +12,28 @@ This is internal module where all real implementations present.
 -}
 module Control.Concurrent.SupervisorInternal where
 
-import           Prelude                       hiding (lookup)
+import           Prelude             hiding (lookup)
 
-import           Control.Concurrent            (ThreadId, myThreadId)
-import           Control.Concurrent.Async      (Async, async, asyncThreadId,
-                                                asyncWithUnmask, cancel)
-import           Control.Concurrent.STM.TMVar  (TMVar, newEmptyTMVarIO,
-                                                putTMVar, takeTMVar)
-import           Control.Concurrent.STM.TQueue (TQueue, readTQueue, writeTQueue)
-import           Control.Exception.Safe        (SomeException, bracket, catch,
-                                                finally, isSyncException, mask_,
-                                                onException,
-                                                uninterruptibleMask_)
-import           Control.Monad                 (void)
-import           Control.Monad.STM             (atomically)
+import           Control.Monad       (void)
 import           Data.Default
-import           Data.Foldable                 (for_, traverse_)
-import           Data.Functor                  (($>))
-import           Data.IORef                    (IORef, modifyIORef', newIORef,
-                                                readIORef, writeIORef)
-import           Data.Map.Strict               (Map, delete, elems, empty,
-                                                insert, keys, lookup)
-import           System.Clock                  (Clock (Monotonic),
-                                                TimeSpec (..), diffTimeSpec,
-                                                getTime)
-import           System.Timeout                (timeout)
+import           Data.Foldable       (for_, traverse_)
+import           Data.Functor        (($>))
+import           Data.Map.Strict     (Map, delete, elems, empty, insert, keys,
+                                      lookup)
+import           System.Clock        (Clock (Monotonic), TimeSpec (..),
+                                      diffTimeSpec, getTime)
+import           UnliftIO            (Async, IORef, SomeException, TMVar,
+                                      TQueue, async, asyncThreadId,
+                                      asyncWithUnmask, atomically, bracket,
+                                      cancel, catch, finally, mask_,
+                                      modifyIORef', newEmptyTMVarIO, newIORef,
+                                      putTMVar, readIORef, readTQueue,
+                                      takeTMVar, timeout, uninterruptibleMask_,
+                                      writeIORef, writeTQueue)
+import           UnliftIO.Concurrent (ThreadId, myThreadId)
 
-import           Data.DelayedQueue             (DelayedQueue,
-                                                newEmptyDelayedQueue, pop, push)
+import           Data.DelayedQueue   (DelayedQueue, newEmptyDelayedQueue, pop,
+                                      push)
 
 {-
     Basic message queue and state machine behavior.
