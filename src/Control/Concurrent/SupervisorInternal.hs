@@ -1,3 +1,4 @@
+{-# LANGUAGE ScopedTypeVariables #-}
 {-|
 Module      : Control.Concurrent.SupervisorInternal
 Copyright   : (c) Naoto Shimazaki 2018
@@ -19,9 +20,10 @@ import           Control.Concurrent.Async      (Async, async, asyncThreadId,
 import           Control.Concurrent.STM.TMVar  (TMVar, newEmptyTMVarIO,
                                                 putTMVar, takeTMVar)
 import           Control.Concurrent.STM.TQueue (TQueue, readTQueue, writeTQueue)
-import           Control.Exception.Safe        (SomeException, bracket,
-                                                catchAsync, isSyncException,
-                                                mask_, uninterruptibleMask_)
+import           Control.Exception.Safe        (SomeException, bracket, catch,
+                                                finally, isSyncException, mask_,
+                                                onException,
+                                                uninterruptibleMask_)
 import           Control.Monad                 (void)
 import           Control.Monad.STM             (atomically)
 import           Data.Default
@@ -225,12 +227,14 @@ newProcess
      -> ProcessSpec     -- ^ Specification of newly started process.
      -> IO (Async ())   -- ^ 'Async' representing forked thread.
 newProcess procMap procSpec@(ProcessSpec monitors _ action) = mask_ $ do
+    reason <- newIORef Killed
     a <- asyncWithUnmask $ \unmask ->
-        let notify reason   = uninterruptibleMask_ . traverse_ (\monitor -> myThreadId >>= monitor reason)
-            toReason e      = if isSyncException (e :: SomeException) then UncaughtException else Killed
-        in (unmask action *> notify Normal monitors) `catchAsync` \e -> notify (toReason e) monitors
+        ((unmask action *> writeIORef reason Normal) `catch` (\(e :: SomeException) -> writeIORef reason UncaughtException))
+        `finally` (readIORef reason >>= notify monitors)
     modifyIORef' procMap $ insert (asyncThreadId a) (a, procSpec)
     pure a
+  where
+    notify monitors reason = uninterruptibleMask_ $ for_ monitors (\monitor -> myThreadId >>= monitor reason)
 
 {-
     Restart intensity handling.
