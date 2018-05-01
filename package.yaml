@@ -29,7 +29,6 @@ library:
   - clock
   - containers
   - data-default
-  - stm
   - unliftio
 
 executables:
@@ -55,7 +54,6 @@ tests:
     - async
     - clock
     - data-default
-    - stm
     - unliftio
     - hspec
     - QuickCheck
