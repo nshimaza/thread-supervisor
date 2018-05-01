@@ -21,6 +21,7 @@ module Control.Concurrent.Supervisor
     -- * Supervisor
     , RestartSensitivity (..)
     , Strategy (..)
+    , SupervisorQueue
     , newSupervisor
     , newSimpleOneForOneSupervisor
     , newChild
