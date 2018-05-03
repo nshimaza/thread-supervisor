@@ -302,7 +302,7 @@ data SupervisorMessage
     = Down ExitReason ThreadId                  -- ^ Notification of child thread termination.
     | StartChild ProcessSpec (TMVar (Async ())) -- ^ Command to start a new supervised thread.
 
-type SupervisorQueue = TQueue SupervisorMessage
+type SupervisorQueue = MessageQueue SupervisorMessage
 
 -- newSupervisorQueue :: IO SupervisorQueue
 -- newSupervisorQueue = newTQueueIO
@@ -316,7 +316,7 @@ newSupervisedProcess
 newSupervisedProcess inbox procMap procSpec =
     newProcess procMap $ addMonitor monitor procSpec
       where
-        monitor reason tid = atomically $ writeTQueue inbox (Down reason tid)
+        monitor reason tid = sendMessage inbox (Down reason tid)
 
 -- | Start all given 'ProcessSpec' on new thread each with supervision.
 startAllSupervisedProcess
@@ -416,5 +416,5 @@ newSupervisor inbox strategy (RestartSensitivity maxR maxT) procSpecs = bracket 
 newChild :: CallTimeout -> SupervisorQueue -> ProcessSpec -> IO (Maybe (Async ()))
 newChild (CallTimeout usec) sv spec = do
     r <- newEmptyTMVarIO
-    atomically . writeTQueue sv $ StartChild spec r
+    sendMessage sv $ StartChild spec r
     timeout usec . atomically . takeTMVar $ r
