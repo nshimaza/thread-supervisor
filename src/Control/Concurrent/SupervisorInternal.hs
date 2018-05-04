@@ -15,10 +15,13 @@ import           Prelude             hiding (lookup)
 
 import           Control.Monad       (void)
 import           Data.Default
-import           Data.Foldable       (for_, traverse_)
+import           Data.Foldable       (for_, traverse_, foldl')
 import           Data.Functor        (($>))
 import           Data.Map.Strict     (Map, delete, elems, empty, insert, keys,
                                       lookup)
+import           Data.Semigroup      ((<>))
+import           Data.Sequence       (Seq, viewl, ViewL (..))
+import qualified Data.Sequence       (empty)
 import           System.Clock        (Clock (Monotonic), TimeSpec (..),
                                       diffTimeSpec, getTime)
 import           UnliftIO            (Async, IORef, SomeException, TMVar,
@@ -28,17 +31,99 @@ import           UnliftIO            (Async, IORef, SomeException, TMVar,
                                       modifyIORef', newEmptyTMVarIO, newIORef,
                                       putTMVar, readIORef, readTQueue,
                                       takeTMVar, timeout, uninterruptibleMask_,
-                                      writeIORef, writeTQueue)
+                                      writeIORef, writeTQueue, Chan, newChan, readChan, writeChan,
+                                      newTQueueIO, newTVarIO, TVar, readTVar, writeTVar, tryReadTQueue)
 import           UnliftIO.Concurrent (ThreadId, myThreadId)
 
 import           Data.DelayedQueue   (DelayedQueue, newEmptyDelayedQueue, pop,
                                       push)
 
 {-
+    Message queue and selective receive.
+-}
+-- | Message queue abstraction
+data MessageQueue a = MessageQueue
+    { messageQueueInbox     :: TQueue a
+    , messageQueueSaveStack :: TVar [a]
+    }
+
+-- | Create a new empty 'MessageQueue'
+newMessageQueue :: IO (MessageQueue a)
+newMessageQueue = MessageQueue <$> newTQueueIO <*> newTVarIO []
+
+-- | Send a message to given 'MessageQueue'
+sendMessage :: MessageQueue a -> a -> IO ()
+sendMessage (MessageQueue inbox _) = atomically . writeTQueue inbox
+
+{-
+    Perform selective receive from given 'MessageQueue'.
+
+    'receiveSelect' seaches given queue for first interesting message predicated by user supplied function.
+    It applies the predicate to the queue, returns the first element that satisfy the predicate and
+    new MessageQueue with the element removed.
+
+    It blocks until interesting message arrived if no interesting message was found in the queue.
+-}
+receiveSelect
+    :: (a -> Bool)      -- ^ Predicate to pick a interesting message.
+    -> MessageQueue a   -- ^ Message queue where interesting message searched for.
+    -> IO a
+receiveSelect predicate q@(MessageQueue inbox saveStack) = atomically $ do
+    saved <- readTVar saveStack
+    case pickFromSaveStack predicate saved of
+        (Just (msg, newSaved))  -> writeTVar saveStack newSaved *> pure msg
+        Nothing                 -> go saved
+  where
+    go newSaved = do
+        msg <- readTQueue inbox
+        if predicate msg
+        then writeTVar saveStack newSaved *> pure msg
+        else go (msg:newSaved)
+
+{-
+    Try to perform selective receive from given 'MessageQueue'.
+
+    'tryReceiveSelect' seaches given queue for first interesting message predicated by user supplied function.
+    It applies the predicate to the queue, returns the first element that satisfy the predicate and
+    new MessageQueue with the element removed.
+
+    It return Nothing if there is no interesting message found in the queue.
+-}
+tryReceiveSelect
+    :: (a -> Bool)      -- ^ Predicate to pick a interesting message.
+    -> MessageQueue a   -- ^ Message queue where interesting message searched for.
+    -> IO (Maybe a)
+tryReceiveSelect predicate q@(MessageQueue inbox saveStack) = atomically $ do
+    saved <- readTVar saveStack
+    case pickFromSaveStack predicate saved of
+        (Just (msg, newSaved))  -> writeTVar saveStack newSaved *> pure (Just msg)
+        Nothing                 -> go saved
+  where
+    go newSaved = do
+        maybeMsg <- tryReadTQueue inbox
+        case maybeMsg of
+            Nothing                     -> writeTVar saveStack newSaved *> pure Nothing
+            Just msg | predicate msg    -> writeTVar saveStack newSaved *> pure (Just msg)
+                     | otherwise        -> go (msg:newSaved)
+
+pickFromSaveStack :: (a -> Bool) -> [a] -> Maybe (a, [a])
+pickFromSaveStack predicate saveStack = go [] $ reverse saveStack
+  where
+    go newSaved []                    = Nothing
+    go newSaved (x:xs) | predicate x  = Just (x, foldl' (flip (:)) newSaved xs)
+                       | otherwise    = go (x:newSaved) xs
+
+
+-- | Receive first message in 'MassageQueue'.  Block until message available.
+receive :: MessageQueue a -> IO a
+receive = receiveSelect (const True)
+
+
+{-
     Basic message queue and state machine behavior.
 -}
 -- | Inbox message queue of finite state machine.
-type MessageQueue a = TQueue a
+type MessageQueue'' a = TQueue a
 
 {-|
     Create a new finite state machine.
@@ -56,7 +141,7 @@ type MessageQueue a = TQueue a
     the state machine will dead lock.
 -}
 newStateMachine
-    :: MessageQueue message -- ^ Event input queue of the state machine.
+    :: MessageQueue'' message -- ^ Event input queue of the state machine.
     -> state                -- ^ Initial state of the state machine.
     -> (state -> message -> IO (Either result state))
                             -- ^ Message handler which processes event and returns result or next state.
@@ -67,11 +152,11 @@ newStateMachine inbox initialState messageHandler = go $ Right initialState
     go (Left result) = pure result
 
 -- | Send a value to given message queue for state machine.
-sendMessage
-    :: MessageQueue message -- ^ Queue the event to be sent.
+sendMessage'
+    :: MessageQueue'' message -- ^ Queue the event to be sent.
     -> message              -- ^ Sent event.
     -> IO ()
-sendMessage q = atomically . writeTQueue q
+sendMessage' q = atomically . writeTQueue q
 
 
 {-
@@ -81,7 +166,7 @@ data ServerCommand arg ret
     = Cast arg
     | Call arg (TMVar ret)
 
-type ServerQueue arg ret = MessageQueue (ServerCommand arg ret)
+type ServerQueue arg ret = MessageQueue'' (ServerCommand arg ret)
 
 newServer
     :: ServerQueue arg ret                          -- ^ Message queue.
@@ -105,7 +190,7 @@ cast
     :: ServerQueue arg ret  -- ^ Message queue.
     -> arg                  -- ^ argument of the cast message.
     -> IO ()
-cast srv = sendMessage srv . Cast
+cast srv = sendMessage' srv . Cast
 
 -- | Timeout of call method for server behavior in microseconds.  Default is 5 second.
 newtype CallTimeout = CallTimeout Int
@@ -123,7 +208,7 @@ call
     -> IO (Maybe ret)       -- ^ Return value or Nothing when request timeout.
 call (CallTimeout usec) srv req = do
     r <- newEmptyTMVarIO
-    sendMessage srv $ Call req r
+    sendMessage' srv $ Call req r
     timeout usec . atomically . takeTMVar $ r
 
 {-|
@@ -302,7 +387,7 @@ data SupervisorMessage
     = Down ExitReason ThreadId                  -- ^ Notification of child thread termination.
     | StartChild ProcessSpec (TMVar (Async ())) -- ^ Command to start a new supervised thread.
 
-type SupervisorQueue = MessageQueue SupervisorMessage
+type SupervisorQueue = MessageQueue'' SupervisorMessage
 
 -- newSupervisorQueue :: IO SupervisorQueue
 -- newSupervisorQueue = newTQueueIO
@@ -316,7 +401,7 @@ newSupervisedProcess
 newSupervisedProcess inbox procMap procSpec =
     newProcess procMap $ addMonitor monitor procSpec
       where
-        monitor reason tid = sendMessage inbox (Down reason tid)
+        monitor reason tid = sendMessage' inbox (Down reason tid)
 
 -- | Start all given 'ProcessSpec' on new thread each with supervision.
 startAllSupervisedProcess
@@ -416,5 +501,5 @@ newSupervisor inbox strategy (RestartSensitivity maxR maxT) procSpecs = bracket 
 newChild :: CallTimeout -> SupervisorQueue -> ProcessSpec -> IO (Maybe (Async ()))
 newChild (CallTimeout usec) sv spec = do
     r <- newEmptyTMVarIO
-    sendMessage sv $ StartChild spec r
+    sendMessage' sv $ StartChild spec r
     timeout usec . atomically . takeTMVar $ r

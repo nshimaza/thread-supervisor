@@ -1,5 +1,6 @@
 module Control.Concurrent.SupervisorSpec where
 
+import           Data.Char                     (chr, ord)
 import           Data.Default                  (def)
 import           Data.Foldable                 (for_)
 import           Data.Functor                  (($>))
@@ -49,11 +50,122 @@ simpleCountingServer q n = newServer q (initializer n) cleanup handler
 
 spec :: Spec
 spec = do
+    describe "MessageQueue receive" $ do
+        it "receives message in sent order" $ do
+            q <- newMessageQueue
+            for_ ['a'..'z'] $ sendMessage q
+            r <- for [1..26] $ const $ receive q
+            r `shouldBe` ['a'..'z']
+
+        it "blocks until message available" $ do
+            q <- newMessageQueue
+            withAsync (receive q) $ \a -> do
+                r1 <- poll a
+                r1 `shouldSatisfy` isNothing
+                sendMessage q "Hello"
+                r2 <- wait a
+                r2 `shouldBe` "Hello"
+
+    describe "MessageQueue receiveSelect" $ do
+        it "allows selective receive" $ do
+            q <- newMessageQueue
+
+            for_ ['a'..'z'] $ sendMessage q
+            r1 <- receiveSelect (== 'a') q
+            r1 `shouldBe` 'a'
+            r2 <- for [1..25] $ const $ receive q
+            r2 `shouldBe` ['b'..'z']
+
+            for_ ['a'..'z'] $ sendMessage q
+            r3 <- receiveSelect (== 'h') q
+            r3 `shouldBe` 'h'
+            r4 <- for [1..25] $ const $ receive q
+            r4 `shouldBe` ['a'..'g'] <> ['i'..'z']
+
+            for_ ['a'..'z'] $ sendMessage q
+            r5 <- receiveSelect (== 'z') q
+            r5 `shouldBe` 'z'
+            r6 <- for [1..25] $ const $ receive q
+            r6 `shouldBe` ['a'..'y']
+
+            for_ [ord 'b' .. ord 'y'] $ \i -> do
+                for_ ['a'..'z'] $ sendMessage q
+                r7 <- receiveSelect (== chr i) q
+                ord r7 `shouldBe` i
+                r8 <- for [1..25] $ const $ receive q
+                r8 `shouldBe` ['a' .. chr (i - 1)] <> [chr (i + 1) .. 'z']
+
+        it "returns the first element satisfying supplied predicate" $ do
+            q <- newMessageQueue
+            for_ "abcdefabcdef" $ sendMessage q
+            r1 <- receiveSelect (\c -> c == 'c' || c == 'd' || c == 'e') q
+            r1 `shouldBe` 'c'
+            r2 <- for [1..11] $ const $ receive q
+            r2 `shouldBe` "abdefabcdef"
+
+        it "blocks until interesting message arrived" $ do
+            q <- newMessageQueue
+            for_ ['a'..'y'] $ sendMessage q
+            withAsync (receiveSelect (== 'z') q) $ \a -> do
+                r1 <- poll a
+                r1 `shouldSatisfy` isNothing
+                sendMessage q 'z'
+                r2 <- wait a
+                r2 `shouldBe` 'z'
+
+    describe "MessageQueue tryReceiveSelect" $ do
+        it "returns Nothing if no message available" $ do
+            q <- newMessageQueue
+            r <- tryReceiveSelect (const True) q
+            r `shouldBe` (Nothing :: Maybe Int)
+
+        it "allows selective receive" $ do
+            q <- newMessageQueue
+
+            for_ ['a'..'z'] $ sendMessage q
+            r1 <- tryReceiveSelect (== 'a') q
+            r1 `shouldBe` Just 'a'
+            r2 <- for [1..25] $ const $ receive q
+            r2 `shouldBe` ['b'..'z']
+
+            for_ ['a'..'z'] $ sendMessage q
+            r3 <- tryReceiveSelect (== 'h') q
+            r3 `shouldBe` Just 'h'
+            r4 <- for [1..25] $ const $ receive q
+            r4 `shouldBe` (['a'..'g'] <> ['i'..'z'])
+
+            for_ ['a'..'z'] $ sendMessage q
+            r5 <- tryReceiveSelect (== 'z') q
+            r5 `shouldBe` Just 'z'
+            r6 <- for [1..25] $ const $ receive q
+            r6 `shouldBe` ['a'..'y']
+
+            for_ [ord 'b' .. ord 'y'] $ \i -> do
+                for_ ['a'..'z'] $ sendMessage q
+                r7 <- tryReceiveSelect (== chr i) q
+                r7 `shouldBe` Just (chr i)
+                r8 <- for [1..25] $ const $ receive q
+                r8 `shouldBe` (['a' .. chr (i - 1)] <> [chr (i + 1) .. 'z'])
+
+        it "returns the first element satisfying supplied predicate" $ do
+            q <- newMessageQueue
+            for_ "abcdefabcdef" $ sendMessage q
+            r1 <- tryReceiveSelect (\c -> c == 'c' || c == 'd' || c == 'e') q
+            r1 `shouldBe` Just 'c'
+            r2 <- for [1..11] $ const $ receive q
+            r2 `shouldBe` "abdefabcdef"
+
+        it "return Nothing when there is no interesting message in the queue" $ do
+            q <- newMessageQueue
+            for_ ['a'..'y'] $ sendMessage q
+            r <- tryReceiveSelect (== 'z') q
+            r `shouldBe` Nothing
+
     describe "State machine behavior" $ do
         it "returns result when event handler returns Left" $ do
             q <- newTQueueIO
             let statem = newStateMachine q () $ \_ _ -> pure $ Left "Hello"
-            sendMessage q ()
+            sendMessage' q ()
             r <- statem
             r `shouldBe` "Hello"
 
@@ -62,7 +174,7 @@ spec = do
             let until5 _ 5 = pure $ Left "Done"
                 until5 _ _ = pure $ Right ()
                 statem     = newStateMachine q () until5
-            for_ [1..7] $ sendMessage q
+            for_ [1..7] $ sendMessage' q
             r <- statem
             r `shouldBe` "Done"
             msg <- atomically $ readTQueue q
@@ -73,7 +185,7 @@ spec = do
             let handler True  _ = pure $ Right False
                 handler False _ = pure $ Left "Finished"
                 statem          = newStateMachine q True handler
-            for_ [(), ()] $ sendMessage q
+            for_ [(), ()] $ sendMessage' q
             r <- statem
             r `shouldBe` "Finished"
 
@@ -82,7 +194,7 @@ spec = do
             let handler n 10 = pure $ Left (n + 10)
                 handler n x  = pure $ Right (n + x)
                 statem       = newStateMachine q 0 handler
-            for_ [1..100] $ sendMessage q
+            for_ [1..100] $ sendMessage' q
             r <- statem
             r `shouldBe` 55
 

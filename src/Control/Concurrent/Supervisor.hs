@@ -11,8 +11,15 @@ A simplified implementation of Erlang/OTP like supervisor over async and underly
 
 module Control.Concurrent.Supervisor
     (
+    -- * Message queue
+      MessageQueue
+    , newMessageQueue
+    , sendMessage
+    , receiveSelect
+    , receive
+    , tryReceiveSelect
     -- * Supervisable IO action
-      Restart (..)
+    , Restart (..)
     , ExitReason (..)
     , Monitor
     , ProcessSpec
@@ -26,9 +33,8 @@ module Control.Concurrent.Supervisor
     , newSimpleOneForOneSupervisor
     , newChild
     -- * State machine
-    , MessageQueue (..)
     , newStateMachine
-    , sendMessage
+    , sendMessage'
     , CallTimeout (..)
     -- * Simple server behavior
     , ServerQueue (..)
