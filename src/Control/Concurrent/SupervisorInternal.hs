@@ -15,24 +15,24 @@ import           Prelude             hiding (lookup)
 
 import           Control.Monad       (void)
 import           Data.Default
-import           Data.Foldable       (for_, traverse_, foldl')
+import           Data.Foldable       (foldl', for_, traverse_)
 import           Data.Functor        (($>))
 import           Data.Map.Strict     (Map, delete, elems, empty, insert, keys,
                                       lookup)
 import           Data.Semigroup      ((<>))
-import           Data.Sequence       (Seq, viewl, ViewL (..))
-import qualified Data.Sequence       (empty)
 import           System.Clock        (Clock (Monotonic), TimeSpec (..),
                                       diffTimeSpec, getTime)
-import           UnliftIO            (Async, IORef, SomeException, TMVar,
-                                      TQueue, async, asyncThreadId,
+import           UnliftIO            (Async, Chan, IORef, SomeException, TMVar,
+                                      TQueue, TVar, async, asyncThreadId,
                                       asyncWithUnmask, atomically, bracket,
                                       cancel, catch, finally, mask_,
-                                      modifyIORef', newEmptyTMVarIO, newIORef,
-                                      putTMVar, readIORef, readTQueue,
-                                      takeTMVar, timeout, uninterruptibleMask_,
-                                      writeIORef, writeTQueue, Chan, newChan, readChan, writeChan,
-                                      newTQueueIO, newTVarIO, TVar, readTVar, writeTVar, tryReadTQueue)
+                                      modifyIORef', newChan, newEmptyTMVarIO,
+                                      newIORef, newTQueueIO, newTVarIO,
+                                      putTMVar, readChan, readIORef, readTQueue,
+                                      readTVar, takeTMVar, timeout,
+                                      tryReadTQueue, uninterruptibleMask_,
+                                      writeChan, writeIORef, writeTQueue,
+                                      writeTVar)
 import           UnliftIO.Concurrent (ThreadId, myThreadId)
 
 import           Data.DelayedQueue   (DelayedQueue, newEmptyDelayedQueue, pop,
@@ -71,8 +71,8 @@ receiveSelect
 receiveSelect predicate q@(MessageQueue inbox saveStack) = atomically $ do
     saved <- readTVar saveStack
     case pickFromSaveStack predicate saved of
-        (Just (msg, newSaved))  -> writeTVar saveStack newSaved *> pure msg
-        Nothing                 -> go saved
+        (Just (msg, newSaved)) -> writeTVar saveStack newSaved *> pure msg
+        Nothing                -> go saved
   where
     go newSaved = do
         msg <- readTQueue inbox
@@ -141,14 +141,14 @@ type MessageQueue'' a = TQueue a
     the state machine will dead lock.
 -}
 newStateMachine
-    :: MessageQueue'' message -- ^ Event input queue of the state machine.
+    :: MessageQueue message -- ^ Event input queue of the state machine.
     -> state                -- ^ Initial state of the state machine.
     -> (state -> message -> IO (Either result state))
                             -- ^ Message handler which processes event and returns result or next state.
     -> IO result            -- ^ Return value when the state machine terminated.
 newStateMachine inbox initialState messageHandler = go $ Right initialState
   where
-    go (Right state) = go =<< mask_ (messageHandler state =<< atomically (readTQueue inbox))
+    go (Right state) = go =<< mask_ (messageHandler state =<< receive inbox)
     go (Left result) = pure result
 
 -- | Send a value to given message queue for state machine.
@@ -166,7 +166,7 @@ data ServerCommand arg ret
     = Cast arg
     | Call arg (TMVar ret)
 
-type ServerQueue arg ret = MessageQueue'' (ServerCommand arg ret)
+type ServerQueue arg ret = MessageQueue (ServerCommand arg ret)
 
 newServer
     :: ServerQueue arg ret                          -- ^ Message queue.
@@ -190,7 +190,7 @@ cast
     :: ServerQueue arg ret  -- ^ Message queue.
     -> arg                  -- ^ argument of the cast message.
     -> IO ()
-cast srv = sendMessage' srv . Cast
+cast srv = sendMessage srv . Cast
 
 -- | Timeout of call method for server behavior in microseconds.  Default is 5 second.
 newtype CallTimeout = CallTimeout Int
@@ -208,7 +208,7 @@ call
     -> IO (Maybe ret)       -- ^ Return value or Nothing when request timeout.
 call (CallTimeout usec) srv req = do
     r <- newEmptyTMVarIO
-    sendMessage' srv $ Call req r
+    sendMessage srv $ Call req r
     timeout usec . atomically . takeTMVar $ r
 
 {-|
@@ -387,7 +387,7 @@ data SupervisorMessage
     = Down ExitReason ThreadId                  -- ^ Notification of child thread termination.
     | StartChild ProcessSpec (TMVar (Async ())) -- ^ Command to start a new supervised thread.
 
-type SupervisorQueue = MessageQueue'' SupervisorMessage
+type SupervisorQueue = MessageQueue SupervisorMessage
 
 -- newSupervisorQueue :: IO SupervisorQueue
 -- newSupervisorQueue = newTQueueIO
@@ -401,7 +401,7 @@ newSupervisedProcess
 newSupervisedProcess inbox procMap procSpec =
     newProcess procMap $ addMonitor monitor procSpec
       where
-        monitor reason tid = sendMessage' inbox (Down reason tid)
+        monitor reason tid = sendMessage inbox (Down reason tid)
 
 -- | Start all given 'ProcessSpec' on new thread each with supervision.
 startAllSupervisedProcess
@@ -420,7 +420,7 @@ killAllSupervisedProcess inbox procMap = uninterruptibleMask_ $ do
       where
         go pmap | null pmap = writeIORef procMap pmap
                 | otherwise = do
-                    cmd <- atomically $ readTQueue inbox
+                    cmd <- receive inbox
                     case cmd of
                         (Down _ tid) -> go $! delete tid pmap
                         _            -> go pmap
@@ -501,5 +501,5 @@ newSupervisor inbox strategy (RestartSensitivity maxR maxT) procSpecs = bracket 
 newChild :: CallTimeout -> SupervisorQueue -> ProcessSpec -> IO (Maybe (Async ()))
 newChild (CallTimeout usec) sv spec = do
     r <- newEmptyTMVarIO
-    sendMessage' sv $ StartChild spec r
+    sendMessage sv $ StartChild spec r
     timeout usec . atomically . takeTMVar $ r
