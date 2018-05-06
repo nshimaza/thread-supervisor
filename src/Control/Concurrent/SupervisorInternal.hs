@@ -71,13 +71,13 @@ receiveSelect
 receiveSelect predicate q@(MessageQueue inbox saveStack) = atomically $ do
     saved <- readTVar saveStack
     case pickFromSaveStack predicate saved of
-        (Just (msg, newSaved)) -> writeTVar saveStack newSaved *> pure msg
+        (Just (msg, newSaved)) -> writeTVar saveStack newSaved $> msg
         Nothing                -> go saved
   where
     go newSaved = do
         msg <- readTQueue inbox
         if predicate msg
-        then writeTVar saveStack newSaved *> pure msg
+        then writeTVar saveStack newSaved $> msg
         else go (msg:newSaved)
 
 {-
@@ -96,14 +96,14 @@ tryReceiveSelect
 tryReceiveSelect predicate q@(MessageQueue inbox saveStack) = atomically $ do
     saved <- readTVar saveStack
     case pickFromSaveStack predicate saved of
-        (Just (msg, newSaved))  -> writeTVar saveStack newSaved *> pure (Just msg)
+        (Just (msg, newSaved))  -> writeTVar saveStack newSaved $> Just msg
         Nothing                 -> go saved
   where
     go newSaved = do
         maybeMsg <- tryReadTQueue inbox
         case maybeMsg of
-            Nothing                     -> writeTVar saveStack newSaved *> pure Nothing
-            Just msg | predicate msg    -> writeTVar saveStack newSaved *> pure (Just msg)
+            Nothing                     -> writeTVar saveStack newSaved $> Nothing
+            Just msg | predicate msg    -> writeTVar saveStack newSaved $> Just msg
                      | otherwise        -> go (msg:newSaved)
 
 pickFromSaveStack :: (a -> Bool) -> [a] -> Maybe (a, [a])
