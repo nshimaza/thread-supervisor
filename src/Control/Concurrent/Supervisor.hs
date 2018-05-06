@@ -34,7 +34,6 @@ module Control.Concurrent.Supervisor
     , newChild
     -- * State machine
     , newStateMachine
-    , sendMessage'
     , CallTimeout (..)
     -- * Simple server behavior
     , ServerQueue (..)

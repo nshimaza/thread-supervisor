@@ -96,8 +96,8 @@ tryReceiveSelect
 tryReceiveSelect predicate q@(MessageQueue inbox saveStack) = atomically $ do
     saved <- readTVar saveStack
     case pickFromSaveStack predicate saved of
-        (Just (msg, newSaved))  -> writeTVar saveStack newSaved $> Just msg
-        Nothing                 -> go saved
+        (Just (msg, newSaved)) -> writeTVar saveStack newSaved $> Just msg
+        Nothing                -> go saved
   where
     go newSaved = do
         maybeMsg <- tryReadTQueue inbox
@@ -120,11 +120,8 @@ receive = receiveSelect (const True)
 
 
 {-
-    Basic message queue and state machine behavior.
+    State machine behavior.
 -}
--- | Inbox message queue of finite state machine.
-type MessageQueue'' a = TQueue a
-
 {-|
     Create a new finite state machine.
 
@@ -150,13 +147,6 @@ newStateMachine inbox initialState messageHandler = go $ Right initialState
   where
     go (Right state) = go =<< mask_ (messageHandler state =<< receive inbox)
     go (Left result) = pure result
-
--- | Send a value to given message queue for state machine.
-sendMessage'
-    :: MessageQueue'' message -- ^ Queue the event to be sent.
-    -> message              -- ^ Sent event.
-    -> IO ()
-sendMessage' q = atomically . writeTQueue q
 
 
 {-
@@ -302,8 +292,8 @@ newProcessMap = newIORef empty
 -}
 newProcess
     :: ProcessMap       -- ^ Map of current live processes where the new process is going to be added.
-     -> ProcessSpec     -- ^ Specification of newly started process.
-     -> IO (Async ())   -- ^ 'Async' representing forked thread.
+    -> ProcessSpec      -- ^ Specification of newly started process.
+    -> IO (Async ())    -- ^ 'Async' representing forked thread.
 newProcess procMap procSpec@(ProcessSpec monitors _ action) = mask_ $ do
     reason <- newIORef Killed
     a <- asyncWithUnmask $ \unmask ->
