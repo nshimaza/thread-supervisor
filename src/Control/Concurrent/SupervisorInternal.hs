@@ -406,14 +406,22 @@ killAllSupervisedProcess :: SupervisorQueue -> ProcessMap -> IO ()
 killAllSupervisedProcess inbox procMap = uninterruptibleMask_ $ do
     pmap <- readIORef procMap
     for_ (elems pmap) $ cancel . fst
-    go pmap
-      where
-        go pmap | null pmap = writeIORef procMap pmap
-                | otherwise = do
-                    cmd <- receive inbox
-                    case cmd of
-                        (Down _ tid) -> go $! delete tid pmap
-                        _            -> go pmap
+
+    -- Because 'cancel' blocks until killed thread exited
+    -- (in other word, it is synchronous operation),
+    -- we are sure we no longer have child process still alive.
+    -- So it is okay to just put an empty process map.
+    writeIORef procMap empty
+
+    -- Inbox of the SV has unprosessed 'Down' massages for killed children.
+    -- Let's cleanup them.
+    tryReceiveSelect isDownMessage inbox >>= go
+  where
+    go Nothing  = pure ()
+    go (Just _) = tryReceiveSelect isDownMessage inbox >>= go
+
+    isDownMessage (Down _ _)    = True
+    isDownMessage _             = False
 
 data Strategy = OneForOne | OneForAll
 
