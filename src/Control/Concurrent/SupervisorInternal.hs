@@ -43,8 +43,10 @@ import           Data.DelayedQueue   (DelayedQueue, newEmptyDelayedQueue, pop,
 -}
 -- | Message queue abstraction
 data MessageQueue a = MessageQueue
-    { messageQueueInbox     :: TQueue a
-    , messageQueueSaveStack :: TVar [a]
+    { messageQueueInbox     :: TQueue a -- ^ Concurrent queue receiving message from other threads.
+    , messageQueueSaveStack :: TVar [a] -- ^ Saved massage by `receiveSelect`.  It keeps messages
+                                        --   not selected by receiveSelect in reversed order.
+                                        --   Latest message is kept at head of the list.
     }
 
 -- | Create a new empty 'MessageQueue'
@@ -55,7 +57,7 @@ newMessageQueue = MessageQueue <$> newTQueueIO <*> newTVarIO []
 sendMessage :: MessageQueue a -> a -> IO ()
 sendMessage (MessageQueue inbox _) = atomically . writeTQueue inbox
 
-{-
+{-|
     Perform selective receive from given 'MessageQueue'.
 
     'receiveSelect' seaches given queue for first interesting message predicated by user supplied function.
@@ -80,7 +82,7 @@ receiveSelect predicate q@(MessageQueue inbox saveStack) = atomically $ do
         then writeTVar saveStack newSaved $> msg
         else go (msg:newSaved)
 
-{-
+{-|
     Try to perform selective receive from given 'MessageQueue'.
 
     'tryReceiveSelect' seaches given queue for first interesting message predicated by user supplied function.
@@ -106,13 +108,16 @@ tryReceiveSelect predicate q@(MessageQueue inbox saveStack) = atomically $ do
             Just msg | predicate msg    -> writeTVar saveStack newSaved $> Just msg
                      | otherwise        -> go (msg:newSaved)
 
+{-|
+    Removes oldest message satisfying predicate from saveStack and return the message and updated saveStack.
+    Returns Nothing if there is no satisfying message.
+-}
 pickFromSaveStack :: (a -> Bool) -> [a] -> Maybe (a, [a])
 pickFromSaveStack predicate saveStack = go [] $ reverse saveStack
   where
     go newSaved []                    = Nothing
     go newSaved (x:xs) | predicate x  = Just (x, foldl' (flip (:)) newSaved xs)
                        | otherwise    = go (x:newSaved) xs
-
 
 -- | Receive first message in 'MassageQueue'.  Block until message available.
 receive :: MessageQueue a -> IO a
@@ -152,12 +157,15 @@ newStateMachine inbox initialState messageHandler = go $ Right initialState
 {-
     Sever behavior
 -}
+-- | Command for 'Server' behavior
 data ServerCommand arg ret
-    = Cast arg
-    | Call arg (TMVar ret)
+    = Cast arg              -- ^ Command without response from server.
+    | Call arg (TMVar ret)  -- ^ Command with response back from server.
 
+-- | Type sysnonym of inbox message queue for server.
 type ServerQueue arg ret = MessageQueue (ServerCommand arg ret)
 
+-- | Create new Server behavior.
 newServer
     :: ServerQueue arg ret                          -- ^ Message queue.
     -> IO state                                     -- ^ Initialize.
@@ -321,6 +329,7 @@ data RestartSensitivity = RestartSensitivity
 instance Default RestartSensitivity where
     def = RestartSensitivity 1 TimeSpec { sec = 5, nsec = 0 }
 
+-- | Timestamp history of restart in a supervisor.
 newtype RestartHist = RestartHist (DelayedQueue TimeSpec) deriving (Eq, Show)
 
 -- | Create a 'RestartHist' with maximum allowed restart embedded as delay of 'DelayedQueue'.
@@ -377,6 +386,7 @@ data SupervisorMessage
     = Down ExitReason ThreadId                  -- ^ Notification of child thread termination.
     | StartChild ProcessSpec (TMVar (Async ())) -- ^ Command to start a new supervised thread.
 
+-- | Type synonym for inbox message queue of supervisor.
 type SupervisorQueue = MessageQueue SupervisorMessage
 
 -- newSupervisorQueue :: IO SupervisorQueue
@@ -423,7 +433,10 @@ killAllSupervisedProcess inbox procMap = uninterruptibleMask_ $ do
     isDownMessage (Down _ _)    = True
     isDownMessage _             = False
 
-data Strategy = OneForOne | OneForAll
+-- | Restart strategy of supervisor
+data Strategy
+    = OneForOne -- ^ Restart only exited process.
+    | OneForAll -- ^ Restart all process supervised by the same supervisor of exited process.
 
 {-|
     Create a supervisor with 'OneForOne' restart strategy and has no static 'ProcessSpec'.
@@ -496,7 +509,12 @@ newSupervisor inbox strategy (RestartSensitivity maxR maxT) procSpecs = bracket 
             atomically $ putTMVar callRet a
             pure $ Right hist
 
-newChild :: CallTimeout -> SupervisorQueue -> ProcessSpec -> IO (Maybe (Async ()))
+-- | Ask the supervisor to spawn new temporary child process.  Returns 'Async' of the new child.
+newChild
+    :: CallTimeout      -- ^ Request timeout in microsecond.
+    -> SupervisorQueue  -- ^ Inbox message queue of the supervisor to ask new process.
+    -> ProcessSpec      -- ^ Supervised process specification to spawn.
+    -> IO (Maybe (Async ()))
 newChild (CallTimeout usec) sv spec = do
     r <- newEmptyTMVarIO
     sendMessage sv $ StartChild spec r
