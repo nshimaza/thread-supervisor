@@ -315,6 +315,33 @@ newProcess procMap procSpec@(ProcessSpec monitors _ action) = mask_ $ do
 {-
     Restart intensity handling.
 -}
+data IntenseRestartDetector = IntenseRestartDetector
+    { intenseRestartDetectorPeriod  :: TimeSpec
+    , intenseRestartDetectorHistory :: DelayedQueue TimeSpec
+    }
+
+newIntenseRestartDetector :: Int -> TimeSpec -> IntenseRestartDetector
+newIntenseRestartDetector intensity period = IntenseRestartDetector period (newEmptyDelayedQueue intensity)
+
+instance Default IntenseRestartDetector where
+    def = newIntenseRestartDetector 1 TimeSpec { sec = 5, nsec = 0 }
+
+detectIntenseRestart
+    :: IntenseRestartDetector
+    -> TimeSpec
+    -> (Bool, IntenseRestartDetector)
+detectIntenseRestart (IntenseRestartDetector maxT history) lastRestart = case pop latestHistory of
+    Nothing                         ->  (False, IntenseRestartDetector maxT latestHistory)
+    Just (oldestRestart, nextHist)  ->  (lastRestart - oldestRestart <= maxT, IntenseRestartDetector maxT nextHist)
+  where
+    latestHistory = push lastRestart history
+
+detectIntenseRestartNow
+    :: IntenseRestartDetector
+    -> IO (Bool, IntenseRestartDetector)
+detectIntenseRestartNow detector = detectIntenseRestart detector <$> getCurrentTime
+
+
 {-|
     'RestartSensitivity' defines condition how supervisor determines intensive restart is happening.
     If more than 'restartSensitivityIntensity' time of restart is triggered within 'restartSensitivityPeriod',

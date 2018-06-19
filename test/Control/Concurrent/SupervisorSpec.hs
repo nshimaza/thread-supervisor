@@ -335,6 +335,75 @@ spec = do
             killedCount `shouldNotBe` 0
             normalCount + killedCount `shouldBe` volume
 
+    describe "IntenseRestartDetector" $ do
+        it "returns True if 1 crash in 0 maximum restart intensity" $ do
+            let crash       = TimeSpec 0 0
+                detector    = newIntenseRestartDetector 0 (TimeSpec 5 0)
+                (result, _) = detectIntenseRestart detector crash
+            result `shouldBe` True
+
+        it "returns True if 1 crash in 0 maximum restart intensity regardless with period" $ do
+            let crash       = TimeSpec 0 0
+                detector    = newIntenseRestartDetector 0 (TimeSpec 0 0)
+                (result, _) = detectIntenseRestart detector crash
+            result `shouldBe` True
+
+        it "returns False if 1 crash in 1 maximum restart intensity" $ do
+            let crash       = TimeSpec 0 0
+                detector    = newIntenseRestartDetector 1 (TimeSpec 5 0)
+                (result, _) = detectIntenseRestart detector crash
+            result `shouldBe` False
+
+        it "returns True if 2 crash in 1 maximum restart intensity within given period" $ do
+            let crash1          = TimeSpec 0 0
+                detector1       = newIntenseRestartDetector 1 (TimeSpec 5 0)
+                (_, detector2)  = detectIntenseRestart detector1 crash1
+                crash2          = TimeSpec 2 0
+                (result, _)     = detectIntenseRestart detector2 crash2
+            result `shouldBe` True
+
+        it "returns False if 2 crash in 1 maximum restart intensity but longer interval than given period" $ do
+            let crash1          = TimeSpec 0 0
+                detector1       = newIntenseRestartDetector 1 (TimeSpec 5 0)
+                (_, detector2)  = detectIntenseRestart detector1 crash1
+                crash2          = TimeSpec 10 0
+                (result, _)     = detectIntenseRestart detector2 crash2
+            result `shouldBe` False
+
+        it "returns False if 1 crash in 2 maximum restart intensity" $ do
+            let crash       = TimeSpec 0 0
+                detector    = newIntenseRestartDetector 2 (TimeSpec 5 0)
+                (result, _) = detectIntenseRestart detector crash
+            result `shouldBe` False
+
+        it "returns False if 2 crash in 2 maximum restart intensity" $ do
+            let crash1          = TimeSpec 0 0
+                detector1       = newIntenseRestartDetector 2 (TimeSpec 5 0)
+                (_, detector2)  = detectIntenseRestart detector1 crash1
+                crash2          = TimeSpec 2 0
+                (result, _)     = detectIntenseRestart detector2 crash2
+            result `shouldBe` False
+
+        it "returns True if 3 crash in 2 maximum restart intensity within given period" $ do
+            let crash1          = TimeSpec 0 0
+                detector1       = newIntenseRestartDetector 2 (TimeSpec 5 0)
+                (_, detector2)  = detectIntenseRestart detector1 crash1
+                crash2          = TimeSpec 2 0
+                (_, detector3)  = detectIntenseRestart detector2 crash2
+                crash3          = TimeSpec 3 0
+                (result, _)     = detectIntenseRestart detector3 crash3
+            result `shouldBe` True
+
+        it "returns False if 3 crash in 2 maximum restart intensity but longer interval than given period" $ do
+            let crash1          = TimeSpec 0 0
+                detector1       = newIntenseRestartDetector 2 (TimeSpec 5 0)
+                (_, detector2)  = detectIntenseRestart detector1 crash1
+                crash2          = TimeSpec 2 0
+                (_, detector3)  = detectIntenseRestart detector2 crash2
+                crash3          = TimeSpec 6 0
+                (result, _)     = detectIntenseRestart detector3 crash3
+            result `shouldBe` False
+
     describe "One-for-one Supervisor with static childlen" $ do
         it "automatically starts children based on given ProcessSpec list" $ do
             rs <- for [1,2,3] $ \n -> do

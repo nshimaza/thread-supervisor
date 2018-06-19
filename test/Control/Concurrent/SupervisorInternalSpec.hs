@@ -17,7 +17,7 @@ import           UnliftIO                              (StringException (..),
                                                         readMVar, readTQueue,
                                                         throwString,
                                                         tryReadTQueue,
-                                                        writeTQueue)
+                                                        withAsync, writeTQueue)
 
 import           Test.Hspec
 

@@ -27,6 +27,10 @@ module Control.Concurrent.Supervisor
     , addMonitor
     -- * Supervisor
     , RestartSensitivity (..)
+    , IntenseRestartDetector
+    , newIntenseRestartDetector
+    , detectIntenseRestart
+    , detectIntenseRestartNow
     , Strategy (..)
     , SupervisorQueue
     , newSupervisor
