@@ -430,8 +430,8 @@ killAllSupervisedProcess inbox procMap = uninterruptibleMask_ $ do
     go Nothing  = pure ()
     go (Just _) = tryReceiveSelect isDownMessage inbox >>= go
 
-    isDownMessage (Down _ _)    = True
-    isDownMessage _             = False
+    isDownMessage (Down _ _) = True
+    isDownMessage _          = False
 
 -- | Restart strategy of supervisor
 data Strategy
