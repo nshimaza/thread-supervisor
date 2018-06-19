@@ -315,16 +315,27 @@ newProcess procMap procSpec@(ProcessSpec monitors _ action) = mask_ $ do
 {-
     Restart intensity handling.
 -}
+{-|
+    'RestartSensitivity' defines condition how supervisor determines intensive restart is happening.
+    If more than 'restartSensitivityIntensity' time of restart is triggered within 'restartSensitivityPeriod',
+    supervisor decides intensive restart is happening and it terminates itself.
+    Default intensity (maximum number of acceptable restart) is 1.  Default period is 5 seconds.
+-}
+data RestartSensitivity = RestartSensitivity
+    { restartSensitivityIntensity :: Int        -- ^ Maximum number of restart accepted within the period below.
+    , restartSensitivityPeriod    :: TimeSpec   -- ^ Length of time window in 'TimeSpec' where the number of restarts is counted.
+    }
+
+instance Default RestartSensitivity where
+    def = RestartSensitivity 1 TimeSpec { sec = 5, nsec = 0 }
+
 data IntenseRestartDetector = IntenseRestartDetector
     { intenseRestartDetectorPeriod  :: TimeSpec
     , intenseRestartDetectorHistory :: DelayedQueue TimeSpec
     }
 
-newIntenseRestartDetector :: Int -> TimeSpec -> IntenseRestartDetector
-newIntenseRestartDetector intensity period = IntenseRestartDetector period (newEmptyDelayedQueue intensity)
-
-instance Default IntenseRestartDetector where
-    def = newIntenseRestartDetector 1 TimeSpec { sec = 5, nsec = 0 }
+newIntenseRestartDetector :: RestartSensitivity -> IntenseRestartDetector
+newIntenseRestartDetector (RestartSensitivity maxR maxT) = IntenseRestartDetector maxT (newEmptyDelayedQueue maxR)
 
 detectIntenseRestart
     :: IntenseRestartDetector
@@ -340,21 +351,6 @@ detectIntenseRestartNow
     :: IntenseRestartDetector
     -> IO (Bool, IntenseRestartDetector)
 detectIntenseRestartNow detector = detectIntenseRestart detector <$> getCurrentTime
-
-
-{-|
-    'RestartSensitivity' defines condition how supervisor determines intensive restart is happening.
-    If more than 'restartSensitivityIntensity' time of restart is triggered within 'restartSensitivityPeriod',
-    supervisor decides intensive restart is happening and it terminates itself.
-    Default intensity (maximum number of acceptable restart) is 1.  Default period is 5 seconds.
--}
-data RestartSensitivity = RestartSensitivity
-    { restartSensitivityIntensity :: Int        -- ^ Maximum number of restart accepted within the period below.
-    , restartSensitivityPeriod    :: TimeSpec   -- ^ Length of time window in 'TimeSpec' where the number of restarts is counted.
-    }
-
-instance Default RestartSensitivity where
-    def = RestartSensitivity 1 TimeSpec { sec = 5, nsec = 0 }
 
 -- | Timestamp history of restart in a supervisor.
 newtype RestartHist = RestartHist (DelayedQueue TimeSpec) deriving (Eq, Show)
@@ -500,26 +496,26 @@ newSupervisor
     -> RestartSensitivity   -- ^ Restart intensity sensitivity in restart count and period.
     -> [ProcessSpec]        -- ^ List of supervised process specifications.
     -> IO ()
-newSupervisor inbox strategy (RestartSensitivity maxR maxT) procSpecs = bracket newProcessMap (killAllSupervisedProcess inbox) initSupervisor
+newSupervisor inbox strategy restartSensitivity procSpecs = bracket newProcessMap (killAllSupervisedProcess inbox) initSupervisor
   where
     initSupervisor procMap = do
         startAllSupervisedProcess inbox procMap procSpecs
-        newStateMachine inbox (newRestartHist maxR) supervisorMessageHandler
+        newStateMachine inbox (newIntenseRestartDetector restartSensitivity) supervisorMessageHandler
       where
         restartChild OneForOne procMap spec = void $ newSupervisedProcess inbox procMap spec
         restartChild OneForAll procMap _    = killAllSupervisedProcess inbox procMap *> startAllSupervisedProcess inbox procMap procSpecs
 
-        supervisorMessageHandler :: RestartHist -> SupervisorMessage -> IO (Either () RestartHist)
+        supervisorMessageHandler :: IntenseRestartDetector -> SupervisorMessage -> IO (Either () IntenseRestartDetector)
         supervisorMessageHandler hist (Down reason tid) = do
             pmap <- readIORef procMap
             processRestart $ snd <$> lookup tid pmap
           where
-            processRestart :: Maybe ProcessSpec -> IO (Either () RestartHist)
+            processRestart :: Maybe ProcessSpec -> IO (Either () IntenseRestartDetector)
             processRestart (Just (procSpec@(ProcessSpec _ restart _))) = do
                 modifyIORef' procMap $ delete tid
                 if restartNeeded restart reason
                 then do
-                    (intense, nextHist) <- isRestartIntenseNow maxT hist
+                    (intense, nextHist) <- detectIntenseRestartNow hist
                     if intense
                     then pure $ Left ()
                     else restartChild strategy procMap procSpec $> Right nextHist
