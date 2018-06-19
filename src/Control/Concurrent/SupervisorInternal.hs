@@ -329,76 +329,53 @@ data RestartSensitivity = RestartSensitivity
 instance Default RestartSensitivity where
     def = RestartSensitivity 1 TimeSpec { sec = 5, nsec = 0 }
 
+{-|
+    'IntenseRestartDetector' keeps data used for detecting intense restart.
+    It keeps maxR (maximum restart intensity), maxT (period of majoring restart intensity) and
+    history of restart with system timestamp in 'Monotonic' form.
+-}
 data IntenseRestartDetector = IntenseRestartDetector
-    { intenseRestartDetectorPeriod  :: TimeSpec
-    , intenseRestartDetectorHistory :: DelayedQueue TimeSpec
+    { intenseRestartDetectorPeriod  :: TimeSpec                 -- ^ Length of time window in 'TimeSpec' where the number of restarts is counted.
+    , intenseRestartDetectorHistory :: DelayedQueue TimeSpec    -- ^ Restart timestamp history.
     }
 
+-- | Create new IntenseRestartDetector with given 'RestartSensitivity' parameters.
 newIntenseRestartDetector :: RestartSensitivity -> IntenseRestartDetector
 newIntenseRestartDetector (RestartSensitivity maxR maxT) = IntenseRestartDetector maxT (newEmptyDelayedQueue maxR)
 
+{-|
+    Determine if the last restart results intensive restart.
+    It pushes the last restart timestamp to the 'DelayedQueue' of restart history held inside
+    of the IntenseRestartDetector then check if the oldest restart record is pushed out from the queue.
+    If no record was pushed out, there are less number of restarts than limit, so it is not intensive.
+    If a record was pushed out, it means we had one more restarts than allowed.
+    If the oldest restart and newest restart happened within allowed time interval, it is intensive.
+
+    This function implements pure part of 'detectIntenseRestartNow'.
+-}
 detectIntenseRestart
-    :: IntenseRestartDetector
-    -> TimeSpec
-    -> (Bool, IntenseRestartDetector)
+    :: IntenseRestartDetector           -- ^ Intense restart detector containing history of past restart with maxT and maxR
+    -> TimeSpec                         -- ^ System timestamp in 'Monotonic' form when the last restart was triggered.
+    -> (Bool, IntenseRestartDetector)   -- ^ Returns 'True' if intensive restart is happening.
+                                        --   Returns new history of restart which has the oldest history removed if possible.
 detectIntenseRestart (IntenseRestartDetector maxT history) lastRestart = case pop latestHistory of
     Nothing                         ->  (False, IntenseRestartDetector maxT latestHistory)
     Just (oldestRestart, nextHist)  ->  (lastRestart - oldestRestart <= maxT, IntenseRestartDetector maxT nextHist)
   where
     latestHistory = push lastRestart history
 
-detectIntenseRestartNow
-    :: IntenseRestartDetector
-    -> IO (Bool, IntenseRestartDetector)
-detectIntenseRestartNow detector = detectIntenseRestart detector <$> getCurrentTime
-
--- | Timestamp history of restart in a supervisor.
-newtype RestartHist = RestartHist (DelayedQueue TimeSpec) deriving (Eq, Show)
-
--- | Create a 'RestartHist' with maximum allowed restart embedded as delay of 'DelayedQueue'.
-newRestartHist
-    :: Int          -- ^ Restart intensity (maximum number of restart allowed before supervisor terminates).
-    -> RestartHist
-newRestartHist = RestartHist . newEmptyDelayedQueue
-
 -- | Get current system timestamp in 'Monotonic' form.
 getCurrentTime :: IO TimeSpec
 getCurrentTime = getTime Monotonic
 
 {-|
-    Determine if the last restart results intensive restart.
-    It pushes the last restart timestamp to the 'DelayedQueue' inside of the restart history
-    then check if the oldest restart record is pushed out from the queue.
-    If no record was pushed out, there are less number of restarts than limit, so it is not intensive.
-    If a record was pushed out, it means we had one more restarts than allowed.
-    If the oldest restart and newest restart happened within allowed time interval, it is intensive.
-
-    This function implements pure part of 'isRestartIntenseNow'.
--}
-isRestartIntense
-    :: TimeSpec             -- ^ Restart period (time window where multiple restarts within it are considered as intensive).
-    -> TimeSpec             -- ^ System timestamp in 'Monotonic' form when the last restart was triggered.
-    -> RestartHist          -- ^ History of past restart with maximum allowed restarts are delayed to appear in its front.
-    -> (Bool, RestartHist)  -- ^ Returns 'True' if intensive restart is happening.
-                            --   Returns new history of restart which has the oldest history removed if possible.
-isRestartIntense maxT lastRestart (RestartHist dq) =
-    let histWithLastRestart = push lastRestart dq
-    in case pop histWithLastRestart of
-        Nothing                         ->  (False, RestartHist histWithLastRestart)
-        Just (oldestRestart, nextHist)  ->  (lastRestart - oldestRestart <= maxT, RestartHist nextHist)
-
-{-|
     Determine if intensive restart is happening now.
     It is called when restart is triggered by some thread termination.
 -}
-isRestartIntenseNow
-    :: TimeSpec                 -- ^ Restart period (time window where multiple restarts within it are considered as intensive).
-    -> RestartHist              -- ^ History of past restart with maximum allowed restarts are delayed to appear in its front.
-    -> IO (Bool, RestartHist)   -- ^ Returns 'True' if intensive restart is happening.
-                                --   Returns new history of restart which has the oldest history removed if possible.
-isRestartIntenseNow maxT restartHist = do
-    currentTime <- getCurrentTime
-    pure $ isRestartIntense maxT currentTime restartHist
+detectIntenseRestartNow
+    :: IntenseRestartDetector   -- ^ Intense restart detector containing history of past restart with maxT and maxR.
+    -> IO (Bool, IntenseRestartDetector)
+detectIntenseRestartNow detector = detectIntenseRestart detector <$> getCurrentTime
 
 {-
     Supervisor
