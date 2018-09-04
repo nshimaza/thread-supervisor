@@ -5,7 +5,7 @@ License     : MIT (see the file LICENSE)
 Maintainer  : https://github.com/nshimaza
 Stability   : experimental
 
-A simplified implementation of Erlang/OTP like supervisor over async and underlying behaviors.
+A simplified implementation of Erlang/OTP like supervisor over async.
 This is internal module where all real implementations present.
 
 -}
