@@ -89,13 +89,13 @@ it uninstalls handlers at actual dynamic thread termination.
 
 # Usage
 
-
+TBD
 
 
 # Design Consideration
 
-When you design thread hierarchy, you have to follow design rule of Erlang/OTP
-where only supervisor can have child process.
+When you design thread hierarchy with this package, you have to follow design
+rule of Erlang/OTP where only supervisor can have child process.
 
 In Erlang/OTP, there are two type of process.
 
