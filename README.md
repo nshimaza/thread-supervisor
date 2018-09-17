@@ -78,11 +78,11 @@ So, what if you kick async action go and make recursive call form `inner` back
 to your loop?  It is a bad idea.  Because `withAsync` is a `bracket`, recursive
 call from `inner` makes non-tail-recurse call.
 
-In other words, the difference between `withAsync` and `newChild` is strategy of
-installing / un-installing cleanup handler.  `withAsync` installs cleanup
-handler on stack so it uninstalls handler based on its lexical scope.
-`newChild` installs cleanup handler surrounding user supplied action so it
-uninstalls handlers at actual dynamic thread termination.
+In other words, the difference between `withAsync` and `async-supervisor` is
+strategy of installing / un-installing cleanup handler.  `withAsync` installs
+cleanup handler on stack so it uninstalls handler based on its lexical scope.
+`async-supervisor` installs cleanup handler surrounding user supplied action so
+it uninstalls handlers at actual dynamic thread termination.
 
 
 
