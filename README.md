@@ -31,10 +31,10 @@ The low level forkIO API requires you keep track and manage entire thread
 lifecycle including accidental case like the above.  Hand crafting it might be
 painful.
 
-This package is intended to provide better replacement API over plain forkIO.
-Not just providing parent-child thread lifecycle management, this package
-provides Erlang/TOP like API so that user can leverage well proven practices
-from Erlang/OTP.
+This package is intended to provide better wrapper API over plain forkIO.  Not
+just providing parent-child thread lifecycle management, this package provides
+Erlang/TOP like API so that user can leverage well proven practices from
+Erlang/OTP.
 
 If you need to keep your child running after parent terminated, this API is not
 for you.
