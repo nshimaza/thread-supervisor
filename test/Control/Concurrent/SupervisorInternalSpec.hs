@@ -23,6 +23,8 @@ import           Test.Hspec
 
 import           Control.Concurrent.SupervisorInternal
 
+{-# ANN module "HLint: ignore Reduce duplication" #-}
+
 instance Eq ExitReason where
     (UncaughtException e) == _  = error "should not compare exception by Eq"
     _ == (UncaughtException e)  = error "should not compare exception by Eq"

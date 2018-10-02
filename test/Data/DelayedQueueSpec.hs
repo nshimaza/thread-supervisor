@@ -8,8 +8,11 @@ import           Test.QuickCheck
 
 import           Data.DelayedQueue
 
+{-# ANN module "HLint: ignore Reduce duplication" #-}
+{-# ANN module "HLint: ignore Avoid lambda" #-}
+
 spec :: Spec
-spec = do
+spec =
     describe "DelayedQueue" $ do
         it "Pop from newEmptyDelayedQueue returns Nothing" $ do
             let rs = pop (newEmptyDelayedQueue 0 :: DelayedQueue ())
@@ -64,7 +67,7 @@ spec = do
 
         prop "Keeps given number of element2" $ \(xs, Positive d) -> do
             let src = foldl' (\tq n -> push n tq) (newEmptyDelayedQueue d) (xs :: [Int])
-                dst = unfoldr (\q -> pop q) $ src
+                dst = unfoldr (\q -> pop q) src
                 len = length xs - d
             if len >= 0
             then take len xs `shouldBe` dst
