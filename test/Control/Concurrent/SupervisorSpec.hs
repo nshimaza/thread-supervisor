@@ -536,6 +536,7 @@ spec = do
             length reports `shouldBe` volume
             let normalCount = length . filter ((==) Normal . fst) $ reports
                 killedCount = length . filter ((==) Killed . fst) $ reports
+            print normalCount
             normalCount `shouldNotBe` 0
             killedCount `shouldNotBe` 0
             normalCount + killedCount `shouldBe` volume
