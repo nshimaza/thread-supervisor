@@ -518,7 +518,7 @@ spec = do
             reports `shouldSatisfy` and . map ((==) Killed . fst)
 
         it "can be killed when children is finishing at the same time" $ do
-            let volume = 1000
+            let volume = 2000
             rs <- for [1..volume] $ \n -> do
                 childQ <- newMessageQueue
                 childMon <- newMessageQueue
