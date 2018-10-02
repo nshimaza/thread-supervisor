@@ -531,7 +531,7 @@ spec = do
                 rs <- for childQs $ \ch -> call def ch True
                 rs `shouldBe` Just <$> [1..volume]
                 async $ for_ childQs $ \ch -> threadDelay 1 *> cast ch False
-                threadDelay 20000
+                threadDelay 10000
             reports <- for childMons receive
             length reports `shouldBe` volume
             let normalCount = length . filter ((==) Normal . fst) $ reports
