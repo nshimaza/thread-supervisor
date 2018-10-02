@@ -1,5 +1,8 @@
 # async-supervisor
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-brightgreen.svg)](https://opensource.org/licenses/MIT)
+[![Build Status](https://travis-ci.org/nshimaza/async-supervisor.svg?branch=master)](https://travis-ci.org/nshimaza/async-supervisor)
+
 A simplified implementation of Erlang/OTP like supervisor over async.
 
 # Overview
