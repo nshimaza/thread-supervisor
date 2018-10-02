@@ -157,38 +157,32 @@ newStateMachine inbox initialState messageHandler = go $ Right initialState
 {-
     Sever behavior
 -}
--- | Command for 'Server' behavior
-data ServerCommand arg ret
-    = Cast arg              -- ^ Command without response from server.
-    | Call arg (TMVar ret)  -- ^ Command with response back from server.
-
 -- | Type sysnonym of inbox message queue for server.
-type ServerQueue arg ret = MessageQueue (ServerCommand arg ret)
+type ServerQueue cmd ret = MessageQueue (cmd, ret -> IO ())
 
 -- | Create new Server behavior.
 newServer
-    :: ServerQueue arg ret                          -- ^ Message queue.
+    :: ServerQueue cmd ret                          -- ^ Message queue.
     -> IO state                                     -- ^ Initialize.
     -> (state -> IO a)                              -- ^ Cleanup.
-    -> (state -> arg -> IO (ret, Either b state))   -- ^ Call message handler.
+    -> (state -> cmd -> IO (ret, Either b state))   -- ^ Message handler.
     -> IO b
 newServer inbox init cleanup handler = bracket init cleanup $ \state ->
     newStateMachine inbox state server
   where
-    server state (Cast arg)     = snd <$> handler state arg
-    server state (Call arg ret) = do
-        (result, nextState) <- handler state arg
-        atomically $ putTMVar ret result
+    server state (req, callBack) = do
+        (result, nextState) <- handler state req
+        callBack result
         pure nextState
 
 {-|
     Send an asynchronous request to the message queue of a server.
 -}
 cast
-    :: ServerQueue arg ret  -- ^ Message queue.
-    -> arg                  -- ^ argument of the cast message.
+    :: ServerQueue cmd ret  -- ^ Message queue.
+    -> cmd                  -- ^ argument of the cast message.
     -> IO ()
-cast srv = sendMessage srv . Cast
+cast srv req = sendMessage srv (req, \_ -> pure ())
 
 -- | Timeout of call method for server behavior in microseconds.  Default is 5 second.
 newtype CallTimeout = CallTimeout Int
@@ -201,12 +195,12 @@ instance Default CallTimeout where
 -}
 call
     :: CallTimeout          -- ^ Timeout.
-    -> ServerQueue arg ret  -- ^ Message queue.
-    -> arg                  -- ^ Request to the server.
+    -> ServerQueue cmd ret  -- ^ Message queue.
+    -> cmd                  -- ^ Request to the server.
     -> IO (Maybe ret)       -- ^ Return value or Nothing when request timeout.
 call (CallTimeout usec) srv req = do
     r <- newEmptyTMVarIO
-    sendMessage srv $ Call req r
+    sendMessage srv (req, atomically . putTMVar r)
     timeout usec . atomically . takeTMVar $ r
 
 {-|
