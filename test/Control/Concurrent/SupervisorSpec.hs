@@ -15,9 +15,8 @@ import           UnliftIO                      (StringException (..), async,
                                                 asyncThreadId, atomically,
                                                 cancel, fromException,
                                                 isEmptyMVar, newEmptyMVar,
-                                                newTVarIO, poll,
-                                                putMVar, readMVar,
-                                                readTVarIO, takeMVar,
+                                                newTVarIO, poll, putMVar,
+                                                readMVar, readTVarIO, takeMVar,
                                                 throwString, wait, withAsync,
                                                 writeTVar)
 import           UnliftIO.Concurrent           (ThreadId, killThread,
@@ -26,6 +25,9 @@ import           UnliftIO.Concurrent           (ThreadId, killThread,
 import           Test.Hspec
 
 import           Control.Concurrent.Supervisor
+
+{-# ANN module "HLint: ignore Reduce duplication" #-}
+{-# ANN module "HLint: ignore Use head" #-}
 
 instance Eq ExitReason where
     (UncaughtException e) == _  = error "should not compare exception by Eq"
@@ -309,7 +311,7 @@ spec = do
                 rs <- for childQs $ \ch -> call def ch True
                 rs `shouldBe` Just <$> [1..10]
             reports <- for childMons takeMVar
-            reports `shouldSatisfy` and . map ((==) Killed . fst)
+            reports `shouldSatisfy` all ((==) Killed . fst)
 
         it "can be killed when children is finishing at the same time" $ do
             let volume = 1000
@@ -436,7 +438,7 @@ spec = do
                 rs2 `shouldBe` Just <$> [2,3,4]
                 for_ childQs $ \ch -> cast ch False
                 reports <- for childMons takeMVar
-                reports `shouldSatisfy` and . map ((==) Normal . fst)
+                reports `shouldSatisfy` all ((==) Normal . fst)
                 rs3 <- for childQs $ \ch -> call def ch True
                 rs3 `shouldBe` Just <$> [1,2,3]
                 rs4 <- for childQs $ \ch -> call def ch True
@@ -457,7 +459,7 @@ spec = do
                 rs1 `shouldBe` [(), ()]
                 for_ triggers $ \t -> putMVar t ()
                 reports <- for childMons takeMVar
-                reports `shouldSatisfy` and . map ((==) Normal . fst)
+                reports `shouldSatisfy` all ((==) Normal . fst)
                 threadDelay 1000
                 rs <- for markers $  \m -> isEmptyMVar m
                 rs `shouldBe` [True, True]
@@ -477,7 +479,7 @@ spec = do
                 rs1 `shouldBe` [(), ()]
                 for_ triggers $ \t -> putMVar t ()
                 reports <- for childMons takeMVar
-                reports `shouldSatisfy` and . map ((==) "oops" . reasonToString . fst)
+                reports `shouldSatisfy` all ((==) "oops" . reasonToString . fst)
                 threadDelay 1000
                 rs <- for markers $  \m -> isEmptyMVar m
                 rs `shouldBe` [False, True]
@@ -496,7 +498,7 @@ spec = do
                 tids <- for markers takeMVar
                 for_ tids killThread
                 reports <- for childMons takeMVar
-                reports `shouldSatisfy` and . map ((==) Killed . fst)
+                reports `shouldSatisfy` all ((==) Killed . fst)
                 threadDelay 1000
                 rs <- for markers $  \m -> isEmptyMVar m
                 rs `shouldBe` [False, True]
@@ -514,7 +516,7 @@ spec = do
                 rs <- for childQs $ \ch -> call def ch True
                 rs `shouldBe` Just <$> [1..10]
             reports <- for childMons takeMVar
-            reports `shouldSatisfy` and . map ((==) Killed . fst)
+            reports `shouldSatisfy` all ((==) Killed . fst)
 
         it "can be killed when children is finishing at the same time" $ do
             let volume = 2000
@@ -630,7 +632,7 @@ spec = do
                 rs2 `shouldBe` Just <$> [2..11]
                 for_ childQs $ \ch -> cast ch False
                 reports <- for childMons takeMVar
-                reports `shouldSatisfy` and . map ((==) Normal . fst)
+                reports `shouldSatisfy` all ((==) Normal . fst)
                 threadDelay 1000
                 r <- poll a
                 r `shouldSatisfy` isNothing
@@ -701,7 +703,7 @@ spec = do
                 rs2 `shouldBe` Just <$> [2..11]
                 for_ childQs $ \ch -> cast ch False
                 reports <- for childMons takeMVar
-                reports `shouldSatisfy` and . map ((==) Normal . fst)
+                reports `shouldSatisfy` all ((==) Normal . fst)
                 threadDelay 1000
                 r <- poll a
                 r `shouldSatisfy` isNothing
@@ -721,7 +723,7 @@ spec = do
                 rs1 `shouldBe` replicate 10 ()
                 for_ triggers $ \t -> putMVar t ()
                 reports <- for childMons takeMVar
-                reports `shouldSatisfy` and . map ((==) "oops" . reasonToString . fst)
+                reports `shouldSatisfy` all ((==) "oops" . reasonToString . fst)
                 threadDelay 1000
                 r <- poll a
                 r `shouldSatisfy` isNothing
@@ -740,7 +742,7 @@ spec = do
                 tids <- for markers takeMVar
                 for_ tids killThread
                 reports <- for childMons takeMVar
-                reports `shouldSatisfy` and . map ((==) Killed . fst)
+                reports `shouldSatisfy` all ((==) Killed . fst)
                 threadDelay 1000
                 r <- poll a
                 r `shouldSatisfy` isNothing
@@ -761,7 +763,7 @@ spec = do
                 rs2 `shouldBe` Just <$> [2..11]
                 for_ childQs $ \ch -> threadDelay 1000 *> cast ch False
                 reports <- for childMons takeMVar
-                reports `shouldSatisfy` and . map ((==) Normal . fst)
+                reports `shouldSatisfy` all ((==) Normal . fst)
                 threadDelay 1000
                 r <- poll a
                 r `shouldSatisfy` isNothing
@@ -781,7 +783,7 @@ spec = do
                 rs1 `shouldBe` replicate 10 ()
                 for_ triggers $ \t -> threadDelay 1000 *> putMVar t ()
                 reports <- for childMons takeMVar
-                reports `shouldSatisfy` and . map ((==) "oops" . reasonToString . fst)
+                reports `shouldSatisfy` all ((==) "oops" . reasonToString . fst)
                 threadDelay 1000
                 r <- poll a
                 r `shouldSatisfy` isNothing
@@ -800,7 +802,7 @@ spec = do
                 tids <- for markers takeMVar
                 for_ tids $ \tid -> threadDelay 1000 *> killThread tid
                 reports <- for childMons takeMVar
-                reports `shouldSatisfy` and . map ((==) Killed . fst)
+                reports `shouldSatisfy` all ((==) Killed . fst)
                 threadDelay 1000
                 r <- poll a
                 r `shouldSatisfy` isNothing
@@ -948,7 +950,7 @@ spec = do
                 rs <- for childQs $ \ch -> call def ch True
                 rs `shouldBe` Just <$> [1..10]
             reports <- for childMons takeMVar
-            reports `shouldSatisfy` and . map ((==) Killed . fst)
+            reports `shouldSatisfy` all ((==) Killed . fst)
 
         it "can be killed when children is finishing at the same time" $ do
             let volume = 1000
@@ -967,7 +969,7 @@ spec = do
                 threadDelay 10000
             reports <- for childMons receive
             (fst . head) reports `shouldBe` Normal
-            tail reports `shouldSatisfy` and . map ((==) Killed . fst)
+            tail reports `shouldSatisfy` all ((==) Killed . fst)
 
         it "intensive normal exit of permanent child causes termination of Supervisor itself" $ do
             rs <- for [1,2] $ \n -> do
@@ -1062,7 +1064,7 @@ spec = do
                 rs2 `shouldBe` Just <$> [2..11]
                 for_ childQs $ \ch -> cast ch False
                 reports <- for childMons takeMVar
-                reports `shouldSatisfy` and . map ((==) Normal . fst)
+                reports `shouldSatisfy` all ((==) Normal . fst)
                 threadDelay 1000
                 r <- poll a
                 r `shouldSatisfy` isNothing
@@ -1135,7 +1137,7 @@ spec = do
                 rs2 `shouldBe` Just <$> [2..11]
                 for_ childQs $ \ch -> cast ch False
                 reports <- for childMons takeMVar
-                reports `shouldSatisfy` and . map ((==) Normal . fst)
+                reports `shouldSatisfy` all ((==) Normal . fst)
                 threadDelay 1000
                 r <- poll a
                 r `shouldSatisfy` isNothing
@@ -1155,7 +1157,7 @@ spec = do
                 rs1 `shouldBe` replicate 10 ()
                 for_ triggers $ \t -> putMVar t ()
                 reports <- for childMons takeMVar
-                reports `shouldSatisfy` and . map ((==) "oops" . reasonToString . fst)
+                reports `shouldSatisfy` all ((==) "oops" . reasonToString . fst)
                 threadDelay 1000
                 r <- poll a
                 r `shouldSatisfy` isNothing
@@ -1174,7 +1176,7 @@ spec = do
                 tids <- for markers takeMVar
                 for_ tids killThread
                 reports <- for childMons takeMVar
-                reports `shouldSatisfy` and . map ((==) Killed . fst)
+                reports `shouldSatisfy` all ((==) Killed . fst)
                 threadDelay 1000
                 r <- poll a
                 r `shouldSatisfy` isNothing
@@ -1202,7 +1204,7 @@ spec = do
             rs <- for [1..10] $ \n -> do
                 marker <- newTVarIO False
                 trigger <- newEmptyMVar
-                let process             = newProcessSpec [] Transient $ (atomically $ writeTVar marker True) *> takeMVar trigger *> throwString "oops" $> ()
+                let process             = newProcessSpec [] Transient $ atomically (writeTVar marker True) *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, process)
             let (markers, triggers, procs) = unzip3 rs
             sv <- newMessageQueue
@@ -1230,10 +1232,10 @@ spec = do
             withAsync (newSupervisor sv OneForAll def procs) $ \a -> do
                 threadDelay 10000
                 tids <- for markers readTVarIO
-                tids `shouldSatisfy` not . elem myTid
+                tids `shouldSatisfy` notElem myTid
                 for_ tids killThread
                 threadDelay 1000
                 r <- poll a
                 r `shouldSatisfy` isNothing
                 tids <- for markers readTVarIO
-                tids `shouldSatisfy` not . elem myTid
+                tids `shouldSatisfy` notElem myTid
