@@ -482,7 +482,7 @@ newSupervisor inbox strategy restartSensitivity procSpecs = bracket newProcessMa
             processRestart $ snd <$> lookup tid pmap
           where
             processRestart :: Maybe ProcessSpec -> IO (Either () IntenseRestartDetector)
-            processRestart (Just (procSpec@(ProcessSpec _ restart _))) = do
+            processRestart (Just procSpec@(ProcessSpec _ restart _)) = do
                 modifyIORef' procMap $ delete tid
                 if restartNeeded restart reason
                 then do
