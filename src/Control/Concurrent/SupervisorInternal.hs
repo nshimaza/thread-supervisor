@@ -17,22 +17,19 @@ import           Control.Monad       (void)
 import           Data.Default
 import           Data.Foldable       (foldl', for_, traverse_)
 import           Data.Functor        (($>))
-import           Data.Map.Strict     (Map, delete, elems, empty, insert, keys,
-                                      lookup)
-import           Data.Semigroup      ((<>))
+import           Data.Map.Strict     (Map, delete, elems, empty, insert, lookup)
 import           System.Clock        (Clock (Monotonic), TimeSpec (..),
                                       diffTimeSpec, getTime)
-import           UnliftIO            (Async, Chan, IORef, SomeException, TMVar,
+import           UnliftIO            (Async, IORef, SomeException, TMVar,
                                       TQueue, TVar, async, asyncThreadId,
                                       asyncWithUnmask, atomically, bracket,
                                       cancel, catch, finally, mask_,
-                                      modifyIORef', newChan, newEmptyTMVarIO,
-                                      newIORef, newTQueueIO, newTVarIO,
-                                      putTMVar, readChan, readIORef, readTQueue,
-                                      readTVar, takeTMVar, timeout,
-                                      tryReadTQueue, uninterruptibleMask_,
-                                      writeChan, writeIORef, writeTQueue,
-                                      writeTVar)
+                                      modifyIORef', newEmptyTMVarIO, newIORef,
+                                      newTQueueIO, newTVarIO, putTMVar,
+                                      readIORef, readTQueue, readTVar,
+                                      takeTMVar, timeout, tryReadTQueue,
+                                      uninterruptibleMask_, writeIORef,
+                                      writeTQueue, writeTVar)
 import           UnliftIO.Concurrent (ThreadId, myThreadId)
 
 import           Data.DelayedQueue   (DelayedQueue, newEmptyDelayedQueue, pop,
