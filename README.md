@@ -94,11 +94,87 @@ it uninstalls handlers at actual dynamic thread termination.
 
 TBD
 
+Implement your worker actor as a "process" which can be supervised.
+
+## High level steps to use
+
+1. Create a `MessageQueue` for your actor
+1. Create an IO action handling the `MessageQueue`
+1. Create a `ProcessSpec` from the IO action
+1. Let a supervisor run the `ProcessSpec` in a supervised thread
+
+## Create a static process
+
+Static process is thread automatically forked when supervisor starts.
+Following procedure makes your IO action a static process.
+
+1. Create a `ProcessSpec` from your IO action
+1. Give the `ProcessSpec` to `newSupervisor`
+1. Run generated supervisor
+
+Static processes are automatically forked to each thread when supervisor started
+or one-for-all supervisor performed restarting action. When IO action inside of
+static process terminated, regardless normal completion or exception, supervisor
+takes restart action based on restart restart type of terminated static process.
+
+A supervisor can have any number of static processes.  Static processes must be
+given when supervisor is created by `newSupervisor`.
+
+### Static process example
+
+Following code creates a supervisor with two static processes.
+
+```haskell
+createYourSupervisorWithStaticProcess = do
+    svQ <- newMessageQueue
+    newSupervisor svQ OneForAll def
+        [ newProcessSpec [] Permanent yourIOAction1
+        , newProcessSpec [] Permanent yourIOAction2
+        ]
+```
+
+`newSupervisor` returns an `IO ()` IO action.  When the IO action actually
+evaluated, it automatically forks two threads.  One is for `yourIOAction1` and
+the other is for `yourIOAction2`.  Because restart type of `yourIOAction1` is
+`Permanent`, the supervisor always kicks restarting action when one of
+`yourIOAction1` or `yourIOAction2` terminated.  When restarting action is
+kicked, the supervisor kills remaining thread and restarts all processes again.
+
+## Create a dynamic process
+
+Dynamic process is thread explicitly forked via `newChild` function.
+Following procedure runs your IO action as a dynamic process.
+
+1. Run a supervisor
+1. Create a `ProcessSpec` from your IO action
+1. Request the supervisor to create a dynamic process based on the `ProcessSpec`
+   by calling `newChild`
+
+Dynamic processes are explicitly forked to each thread via `newChild` request to
+running supervisor.  Supervisor never restarts dynamic process.  It ignores
+restart type defined in `ProcessSpec` of dynamic process.
+
+### Dynamic process example
+
+Following code runs a supervisor in different thread then request it to run a
+dynamic process.
+
+```haskell
+    -- Assume somewhere in a program
+    -- create a supervisor somewhere
+    svQ <- newMessageQueue
+    newSimpleOneForOneSupervisor svQ
+    -- Another place in a program
+    -- Assume the supervisor is already running on another thread
+    let yourProcessSpec = newProcessSpec [] Temporary yourIOAction
+    maybeChildAsync <- newChild def svQ yourProcessSpec
+```
+
 
 # Design Consideration
 
 When you design thread hierarchy with this package, you have to follow design
-rule of Erlang/OTP where only supervisor can have child process.
+rule of Erlang/OTP where only supervisor can have child processes.
 
 In Erlang/OTP, there are two type of process.
 
