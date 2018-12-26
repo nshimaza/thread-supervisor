@@ -40,15 +40,27 @@ reasonToString :: ExitReason -> String
 reasonToString  (UncaughtException e) = toStr $ fromException e
   where toStr (Just (StringException str _)) = str
 
-data ConstServerMessage = AskFst | AskSnd
+data ConstServerCmd = AskFst (ServerCallback Int) | AskSnd (ServerCallback Char)
 
-simpleCountingServer :: ServerQueue Bool Int -> Int -> IO Int
+data TickerServerCmd = Tick (ServerCallback Int)
+
+data SimpleCountingServerCmd
+    = CountUp (ServerCallback Int)
+    | Finish (ServerCallback Int)
+
+simpleCountingServer :: ServerQueue SimpleCountingServerCmd -> Int -> IO Int
 simpleCountingServer q n = newServer q (initializer n) cleanup handler
   where
     initializer     = pure
     cleanup _       = pure ()
-    handler s False = pure (s, Left s)
-    handler s True  = pure (s, Right (s + 1))
+    handler s (CountUp cont)    = cont s *> pure (Right (s + 1))
+    handler s (Finish cont)     = cont s *> pure (Left s)
+
+callCountUp :: ServerQueue SimpleCountingServerCmd -> IO (Maybe Int)
+callCountUp q = call def q CountUp
+
+castFinish :: ServerQueue SimpleCountingServerCmd -> IO ()
+castFinish q = cast q Finish
 
 spec :: Spec
 spec = do
@@ -203,36 +215,36 @@ spec = do
     describe "Server" $ do
         it "has call method which return value synchronously" $ do
             srvQ <- newMessageQueue
-            let initializer         = pure (1, 2)
+            let initializer         = pure (1, 'a')
                 cleanup _           = pure ()
-                handler s AskFst = pure (fst s, Right s)
-                handler s AskSnd = pure (snd s, Right s)
+                handler s (AskFst cont) = cont (fst s) $> Right s
+                handler s (AskSnd cont) = cont (snd s) $> Right s
                 srv                     = newServer srvQ initializer cleanup handler
             withAsync srv $ \_ -> do
                 r1 <- call def srvQ AskFst
                 r1 `shouldBe` Just 1
                 r2 <- call def srvQ AskSnd
-                r2 `shouldBe` Just 2
+                r2 `shouldBe` Just 'a'
 
         it "keeps its own state and cast changes the state" $ do
             srvQ <- newMessageQueue
             let initializer = pure 0
                 cleanup _   = pure ()
-                handler s _ = pure (s, Right (s + 1))
-                srv         = newServer srvQ initializer cleanup handler
+                handler s (Tick cont)   = cont s $> Right (s + 1)
+                srv                     = newServer srvQ initializer cleanup handler
             withAsync srv $ \_ -> do
-                r1 <- call def srvQ ()
+                r1 <- call def srvQ Tick
                 r1 `shouldBe` Just 0
-                cast srvQ ()
-                r2 <- call def srvQ ()
+                cast srvQ Tick
+                r2 <- call def srvQ Tick
                 r2 `shouldBe` Just 2
 
         it "keeps its own state and call can change the state" $ do
             srvQ <- newMessageQueue
             withAsync (simpleCountingServer srvQ 0) $ \_ -> do
-                r1 <- call def srvQ True
+                r1 <- callCountUp srvQ
                 r1 `shouldBe` Just 0
-                r2 <- call def srvQ True
+                r2 <- callCountUp srvQ
                 r2 `shouldBe` Just 1
 
         it "timeouts call method when server is not responding" $ do
@@ -240,11 +252,11 @@ spec = do
             blocker <- newEmptyMVar
             let initializer = pure ()
                 cleanup _   = pure ()
-                handler _ _ = takeMVar blocker $> ((), Right ())
+                handler _ _ = takeMVar blocker $> Right ()
                 srv             = newServer srvQ initializer cleanup handler
             withAsync srv $ \_ -> do
-                r1 <- call (CallTimeout 10000) srvQ ()
-                (r1 :: Maybe ()) `shouldBe` Nothing
+                r1 <- call (CallTimeout 10000) srvQ AskFst
+                (r1 :: Maybe Int) `shouldBe` Nothing
 
     describe "SimpleOneForOneSupervisor" $ do
         it "it starts a dynamic child" $ do
@@ -308,7 +320,7 @@ spec = do
             sv <- newMessageQueue
             withAsync (newSimpleOneForOneSupervisor sv) $ \_ -> do
                 for_ procs $ newChild def sv
-                rs <- for childQs $ \ch -> call def ch True
+                rs <- for childQs callCountUp
                 rs `shouldBe` Just <$> [1..10]
             reports <- for childMons takeMVar
             reports `shouldSatisfy` all ((==) Killed . fst)
@@ -325,9 +337,9 @@ spec = do
             sv <- newMessageQueue
             withAsync (newSimpleOneForOneSupervisor sv) $ \_ -> do
                 for_ procs $ newChild def sv
-                rs <- for childQs $ \ch -> call def ch True
+                rs <- for childQs callCountUp
                 rs `shouldBe` Just <$> [1..volume]
-                async $ for_ childQs $ \ch -> threadDelay 1 *> cast ch False
+                async $ for_ childQs $ \ch -> threadDelay 1 *> castFinish ch
                 threadDelay 10000
             reports <- for childMons takeMVar
             length reports `shouldBe` volume
@@ -417,9 +429,9 @@ spec = do
             let (childQs, childMons, procs) = unzip3 rs
             sv <- newMessageQueue
             withAsync (newSupervisor sv OneForOne def procs) $ \_ -> do
-                rs1 <- for childQs $ \ch -> call def ch True
+                rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1,2,3]
-                rs2 <- for childQs $ \ch -> call def ch True
+                rs2 <- for childQs callCountUp
                 rs2 `shouldBe` Just <$> [2,3,4]
 
         it "automatically restarts finished children with permanent restart type" $ do
@@ -432,16 +444,16 @@ spec = do
             let (childQs, childMons, procs) = unzip3 rs
             sv <- newMessageQueue
             withAsync (newSupervisor sv OneForOne def { restartSensitivityIntensity = 3 } procs) $ \_ -> do
-                rs1 <- for childQs $ \ch -> call def ch True
+                rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1,2,3]
-                rs2 <- for childQs $ \ch -> call def ch True
+                rs2 <- for childQs callCountUp
                 rs2 `shouldBe` Just <$> [2,3,4]
-                for_ childQs $ \ch -> cast ch False
+                for_ childQs $ \ch -> castFinish ch
                 reports <- for childMons takeMVar
                 reports `shouldSatisfy` all ((==) Normal . fst)
-                rs3 <- for childQs $ \ch -> call def ch True
+                rs3 <- for childQs callCountUp
                 rs3 `shouldBe` Just <$> [1,2,3]
-                rs4 <- for childQs $ \ch -> call def ch True
+                rs4 <- for childQs callCountUp
                 rs4 `shouldBe` Just <$> [2,3,4]
 
         it "restarts neither normally finished transient nor temporary child" $ do
@@ -513,7 +525,7 @@ spec = do
             let (childQs, childMons, procs) = unzip3 rs
             sv <- newMessageQueue
             withAsync (newSupervisor sv OneForOne def procs) $ \_ -> do
-                rs <- for childQs $ \ch -> call def ch True
+                rs <- for childQs callCountUp
                 rs `shouldBe` Just <$> [1..10]
             reports <- for childMons takeMVar
             reports `shouldSatisfy` all ((==) Killed . fst)
@@ -529,9 +541,9 @@ spec = do
             let (childQs, childMons, procs) = unzip3 rs
             sv <- newMessageQueue
             withAsync (newSupervisor sv OneForOne def { restartSensitivityIntensity = 1000 } procs) $ \_ -> do
-                rs <- for childQs $ \ch -> call def ch True
+                rs <- for childQs callCountUp
                 rs `shouldBe` Just <$> [1..volume]
-                async $ for_ childQs $ \ch -> threadDelay 1 *> cast ch False
+                async $ for_ childQs $ \ch -> threadDelay 1 *> castFinish ch
                 threadDelay 10000
             reports <- for childMons receive
             length reports `shouldBe` volume
@@ -551,16 +563,16 @@ spec = do
             let (childQs, childMons, procs) = unzip3 rs
             sv <- newMessageQueue
             withAsync (newSupervisor sv OneForOne def procs) $ \a -> do
-                rs1 <- for childQs $ \ch -> call def ch True
+                rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1,2]
-                rs2 <- for childQs $ \ch -> call def ch True
+                rs2 <- for childQs callCountUp
                 rs2 `shouldBe` Just <$> [2,3]
-                cast (head childQs) False
+                castFinish (head childQs)
                 report1 <- takeMVar (head childMons)
                 fst report1 `shouldBe` Normal
-                rs3 <- for childQs $ \ch -> call def ch True
+                rs3 <- for childQs callCountUp
                 rs3 `shouldBe` Just <$> [1,4]
-                cast (head childQs) False
+                castFinish (head childQs)
                 report2 <- takeMVar (head childMons)
                 fst report2 `shouldBe` Normal
                 r <- wait a
@@ -626,11 +638,11 @@ spec = do
             let (childQs, childMons, procs) = unzip3 rs
             sv <- newMessageQueue
             withAsync (newSupervisor sv OneForOne def procs) $ \a -> do
-                rs1 <- for childQs $ \ch -> call def ch True
+                rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1..10]
-                rs2 <- for childQs $ \ch -> call def ch True
+                rs2 <- for childQs callCountUp
                 rs2 `shouldBe` Just <$> [2..11]
-                for_ childQs $ \ch -> cast ch False
+                for_ childQs $ \ch -> castFinish ch
                 reports <- for childMons takeMVar
                 reports `shouldSatisfy` all ((==) Normal . fst)
                 threadDelay 1000
@@ -697,11 +709,11 @@ spec = do
             let (childQs, childMons, procs) = unzip3 rs
             sv <- newMessageQueue
             withAsync (newSupervisor sv OneForOne def procs) $ \a -> do
-                rs1 <- for childQs $ \ch -> call def ch True
+                rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1..10]
-                rs2 <- for childQs $ \ch -> call def ch True
+                rs2 <- for childQs callCountUp
                 rs2 `shouldBe` Just <$> [2..11]
-                for_ childQs $ \ch -> cast ch False
+                for_ childQs $ \ch -> castFinish ch
                 reports <- for childMons takeMVar
                 reports `shouldSatisfy` all ((==) Normal . fst)
                 threadDelay 1000
@@ -757,11 +769,11 @@ spec = do
             let (childQs, childMons, procs) = unzip3 rs
             sv <- newMessageQueue
             withAsync (newSupervisor sv OneForOne def { restartSensitivityPeriod = TimeSpec 0 1000 } procs) $ \a -> do
-                rs1 <- for childQs $ \ch -> call def ch True
+                rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1..10]
-                rs2 <- for childQs $ \ch -> call def ch True
+                rs2 <- for childQs callCountUp
                 rs2 `shouldBe` Just <$> [2..11]
-                for_ childQs $ \ch -> threadDelay 1000 *> cast ch False
+                for_ childQs $ \ch -> threadDelay 1000 *> castFinish ch
                 reports <- for childMons takeMVar
                 reports `shouldSatisfy` all ((==) Normal . fst)
                 threadDelay 1000
@@ -818,9 +830,9 @@ spec = do
             let (childQs, childMons, procs) = unzip3 rs
             sv <- newMessageQueue
             withAsync (newSupervisor sv OneForAll def procs) $ \_ -> do
-                rs1 <- for childQs $ \ch -> call def ch True
+                rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1,2,3]
-                rs2 <- for childQs $ \ch -> call def ch True
+                rs2 <- for childQs callCountUp
                 rs2 `shouldBe` Just <$> [2,3,4]
 
         it "automatically restarts all static children when one of permanent children finished" $ do
@@ -833,16 +845,16 @@ spec = do
             let (childQs, childMons, procs) = unzip3 rs
             sv <- newMessageQueue
             withAsync (newSupervisor sv OneForAll def procs) $ \_ -> do
-                rs1 <- for childQs $ \ch -> call def ch True
+                rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1,2,3]
-                rs2 <- for childQs $ \ch -> call def ch True
+                rs2 <- for childQs callCountUp
                 rs2 `shouldBe` Just <$> [2,3,4]
-                cast (head childQs) False
+                castFinish (head childQs)
                 reports <- for childMons takeMVar
                 fst <$> reports `shouldBe` [Normal, Killed, Killed]
-                rs3 <- for childQs $ \ch -> call def ch True
+                rs3 <- for childQs callCountUp
                 rs3 `shouldBe` Just <$> [1,2,3]
-                rs4 <- for childQs $ \ch -> call def ch True
+                rs4 <- for childQs callCountUp
                 rs4 `shouldBe` Just <$> [2,3,4]
 
         it "does not restart children on normal exit of transient or temporary child" $ do
@@ -947,7 +959,7 @@ spec = do
             let (childQs, childMons, procs) = unzip3 rs
             sv <- newMessageQueue
             withAsync (newSupervisor sv OneForAll def procs) $ \_ -> do
-                rs <- for childQs $ \ch -> call def ch True
+                rs <- for childQs callCountUp
                 rs `shouldBe` Just <$> [1..10]
             reports <- for childMons takeMVar
             reports `shouldSatisfy` all ((==) Killed . fst)
@@ -963,9 +975,9 @@ spec = do
             let (childQs, childMons, procs) = unzip3 rs
             sv <- newMessageQueue
             withAsync (newSupervisor sv OneForAll def procs) $ \_ -> do
-                rs <- for childQs $ \ch -> call def ch True
+                rs <- for childQs callCountUp
                 rs `shouldBe` Just <$> [1..volume]
-                async $ threadDelay 1 *> cast (head childQs) False
+                async $ threadDelay 1 *> castFinish (head childQs)
                 threadDelay 10000
             reports <- for childMons receive
             (fst . head) reports `shouldBe` Normal
@@ -981,16 +993,16 @@ spec = do
             let (childQs, childMons, procs) = unzip3 rs
             sv <- newMessageQueue
             withAsync (newSupervisor sv OneForAll def procs) $ \a -> do
-                rs1 <- for childQs $ \ch -> call def ch True
+                rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1,2]
-                rs2 <- for childQs $ \ch -> call def ch True
+                rs2 <- for childQs callCountUp
                 rs2 `shouldBe` Just <$> [2,3]
-                cast (head childQs) False
+                castFinish (head childQs)
                 reports1 <- for childMons takeMVar
                 fst <$> reports1 `shouldBe` [Normal, Killed]
-                rs3 <- for childQs $ \ch -> call def ch True
+                rs3 <- for childQs callCountUp
                 rs3 `shouldBe` Just <$> [1,2]
-                cast (head childQs) False
+                castFinish (head childQs)
                 reports2 <- for childMons takeMVar
                 fst <$> reports2 `shouldBe` [Normal, Killed]
                 r <- wait a
@@ -1058,11 +1070,11 @@ spec = do
             let (childQs, childMons, procs) = unzip3 rs
             sv <- newMessageQueue
             withAsync (newSupervisor sv OneForAll def procs) $ \a -> do
-                rs1 <- for childQs $ \ch -> call def ch True
+                rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1..10]
-                rs2 <- for childQs $ \ch -> call def ch True
+                rs2 <- for childQs callCountUp
                 rs2 `shouldBe` Just <$> [2..11]
-                for_ childQs $ \ch -> cast ch False
+                for_ childQs $ \ch -> castFinish ch
                 reports <- for childMons takeMVar
                 reports `shouldSatisfy` all ((==) Normal . fst)
                 threadDelay 1000
@@ -1131,11 +1143,11 @@ spec = do
             let (childQs, childMons, procs) = unzip3 rs
             sv <- newMessageQueue
             withAsync (newSupervisor sv OneForAll def procs) $ \a -> do
-                rs1 <- for childQs $ \ch -> call def ch True
+                rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1..10]
-                rs2 <- for childQs $ \ch -> call def ch True
+                rs2 <- for childQs callCountUp
                 rs2 `shouldBe` Just <$> [2..11]
-                for_ childQs $ \ch -> cast ch False
+                for_ childQs $ \ch -> castFinish ch
                 reports <- for childMons takeMVar
                 reports `shouldSatisfy` all ((==) Normal . fst)
                 threadDelay 1000
@@ -1189,15 +1201,15 @@ spec = do
             let (childQs, procs) = unzip rs
             sv <- newMessageQueue
             withAsync (newSupervisor sv OneForAll def { restartSensitivityPeriod = TimeSpec 0 1000 } procs) $ \a -> do
-                rs1 <- for childQs $ \ch -> call def ch True
+                rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1..10]
-                rs2 <- for childQs $ \ch -> call def ch True
+                rs2 <- for childQs callCountUp
                 rs2 `shouldBe` Just <$> [2..11]
-                for_ childQs $ \ch -> threadDelay 1000 *> cast ch False
+                for_ childQs $ \ch -> threadDelay 1000 *> castFinish ch
                 threadDelay 1000
                 r <- poll a
                 r `shouldSatisfy` isNothing
-                rs1 <- for childQs $ \ch -> call def ch True
+                rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1..10]
 
         it "longer interval multiple crash of transient child does not terminate Supervisor" $ do
