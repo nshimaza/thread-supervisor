@@ -46,6 +46,7 @@ module Control.Concurrent.Supervisor
     , cast
     , call
     , callAsync
+    , callIgnore
     ) where
 
 import           Control.Concurrent.SupervisorInternal

@@ -155,7 +155,7 @@ newStateMachine inbox initialState messageHandler = go $ Right initialState
     Sever behavior
 -}
 -- | Type sysnonym of inbox message queue for server.
-type ServerQueue cmd = MessageQueue cmd
+type ServerQueue = MessageQueue
 type ServerCallback a = (a -> IO ())
 
 -- | Create new Server behavior.
@@ -169,13 +169,13 @@ newServer inbox init cleanup handler = bracket init cleanup $ \state ->
     newStateMachine inbox state handler
 
 {-|
-    Send an asynchrounous request to a server without waiting for return value.
+    Send an asynchrounous request to a server.
 -}
 cast
-    :: ServerQueue cmd          -- ^ Message queue of the target server.
-    -> ((a -> IO ()) -> cmd)    -- ^ Request to the server without callback supplied.
+    :: ServerQueue cmd  -- ^ Message queue of the target server.
+    -> cmd              -- ^ Request to the server.
     -> IO ()
-cast srv req = sendMessage srv $ req (\_ -> pure ())
+cast srv req = sendMessage srv req
 
 -- | Timeout of call method for server behavior in microseconds.  Default is 5 second.
 newtype CallTimeout = CallTimeout Int
@@ -187,7 +187,7 @@ instance Default CallTimeout where
     Send an synchronouse request to a server and waits for a return value until timeout.
 -}
 call
-    :: CallTimeout -- ^ Timeout.
+    :: CallTimeout              -- ^ Timeout.
     -> ServerQueue cmd          -- ^ Message queue of the target server.
     -> ((a -> IO ()) -> cmd)    -- ^ Request to the server without callback supplied.
     -> IO (Maybe a)
@@ -213,6 +213,15 @@ callAsync
     -> (Maybe a -> IO b)        -- ^ callback to process return value of the call.  Nothing is given on timeout.
     -> IO (Async b)
 callAsync timeout srv req cont = async $ call timeout srv req >>= cont
+
+{-|
+    Send an request to a server but ignore return value.
+-}
+callIgnore
+    :: ServerQueue cmd          -- ^ Message queue of the target server.
+    -> ((a -> IO ()) -> cmd)    -- ^ Request to the server without callback supplied.
+    -> IO ()
+callIgnore srv req = sendMessage srv $ req (\_ -> pure ())
 
 
 {-
@@ -370,14 +379,11 @@ detectIntenseRestartNow detector = detectIntenseRestart detector <$> getCurrentT
 
 -- | 'SupervisorMessage' defines all message types supervisor can receive.
 data SupervisorMessage
-    = Down ExitReason ThreadId                  -- ^ Notification of child thread termination.
-    | StartChild ProcessSpec (TMVar (Async ())) -- ^ Command to start a new supervised thread.
+    = Down ExitReason ThreadId                              -- ^ Notification of child thread termination.
+    | StartChild ProcessSpec (ServerCallback (Async ()))    -- ^ Command to start a new supervised thread.
 
 -- | Type synonym for inbox message queue of supervisor.
 type SupervisorQueue = MessageQueue SupervisorMessage
-
--- newSupervisorQueue :: IO SupervisorQueue
--- newSupervisorQueue = newTQueueIO
 
 -- | Start a new thread with supervision.
 newSupervisedProcess
@@ -385,10 +391,10 @@ newSupervisedProcess
     -> ProcessMap       -- ^ Map of current live processes which the supervisor monitors.
     -> ProcessSpec      -- ^ Specification of the process to be started.
     -> IO (Async ())
-newSupervisedProcess inbox procMap procSpec =
+newSupervisedProcess sv procMap procSpec =
     newProcess procMap $ addMonitor monitor procSpec
       where
-        monitor reason tid = sendMessage inbox (Down reason tid)
+        monitor reason tid = cast sv (Down reason tid)
 
 -- | Start all given 'ProcessSpec' on new thread each with supervision.
 startAllSupervisedProcess
@@ -417,8 +423,8 @@ killAllSupervisedProcess inbox procMap = uninterruptibleMask_ $ do
     go Nothing  = pure ()
     go (Just _) = tryReceiveSelect isDownMessage inbox >>= go
 
-    isDownMessage (Down _ _) = True
-    isDownMessage _          = False
+    isDownMessage (Down _ _)    = True
+    isDownMessage _             = False
 
 -- | Restart strategy of supervisor
 data Strategy
@@ -460,41 +466,42 @@ newSupervisor
     -> RestartSensitivity   -- ^ Restart intensity sensitivity in restart count and period.
     -> [ProcessSpec]        -- ^ List of supervised process specifications.
     -> IO ()
-newSupervisor inbox strategy restartSensitivity procSpecs = bracket newProcessMap (killAllSupervisedProcess inbox) initSupervisor
+newSupervisor inbox strategy restartSensitivity procSpecs = newServer inbox initSv cleanup handler
   where
-    initSupervisor procMap = do
+    initSv = do
+        procMap <- newProcessMap
         startAllSupervisedProcess inbox procMap procSpecs
-        newStateMachine inbox (newIntenseRestartDetector restartSensitivity) supervisorMessageHandler
+        pure (procMap, newIntenseRestartDetector restartSensitivity)
+
+    cleanup (procMap, _)    = killAllSupervisedProcess inbox procMap
+
+    handler :: (ProcessMap, IntenseRestartDetector) -> SupervisorMessage -> IO (Either () (ProcessMap, IntenseRestartDetector))
+    handler (procMap, hist) (Down reason tid) = do
+        pmap <- readIORef procMap
+        processRestart $ snd <$> lookup tid pmap
       where
-        restartChild OneForOne procMap spec = void $ newSupervisedProcess inbox procMap spec
-        restartChild OneForAll procMap _    = killAllSupervisedProcess inbox procMap *> startAllSupervisedProcess inbox procMap procSpecs
+        processRestart :: Maybe ProcessSpec -> IO (Either () (ProcessMap, IntenseRestartDetector))
+        processRestart (Just procSpec@(ProcessSpec _ restart _)) = do
+            modifyIORef' procMap $ delete tid
+            if restartNeeded restart reason
+            then do
+                (intense, nextHist) <- detectIntenseRestartNow hist
+                if intense
+                then pure $ Left ()
+                else restartChild strategy procMap procSpec $> Right (procMap, nextHist)
+            else
+                pure $ Right (procMap, hist)
+        processRestart Nothing = pure $ Right (procMap, hist)
 
-        supervisorMessageHandler :: IntenseRestartDetector -> SupervisorMessage -> IO (Either () IntenseRestartDetector)
-        supervisorMessageHandler hist (Down reason tid) = do
-            pmap <- readIORef procMap
-            processRestart $ snd <$> lookup tid pmap
-          where
-            processRestart :: Maybe ProcessSpec -> IO (Either () IntenseRestartDetector)
-            processRestart (Just procSpec@(ProcessSpec _ restart _)) = do
-                modifyIORef' procMap $ delete tid
-                if restartNeeded restart reason
-                then do
-                    (intense, nextHist) <- detectIntenseRestartNow hist
-                    if intense
-                    then pure $ Left ()
-                    else restartChild strategy procMap procSpec $> Right nextHist
-                else
-                    pure $ Right hist
-            processRestart Nothing = pure $ Right hist
+        restartNeeded Temporary _      = False
+        restartNeeded Transient Normal = False
+        restartNeeded _         _      = True
 
-            restartNeeded Temporary _      = False
-            restartNeeded Transient Normal = False
-            restartNeeded _         _      = True
+    handler (procMap, hist) (StartChild (ProcessSpec monitors _ proc) cont) =
+        (newSupervisedProcess inbox procMap (ProcessSpec monitors Temporary proc) >>= cont) $> Right (procMap, hist)
 
-        supervisorMessageHandler hist (StartChild (ProcessSpec monitors _ proc) callRet) = do
-            a <- newSupervisedProcess inbox procMap (ProcessSpec monitors Temporary proc)
-            atomically $ putTMVar callRet a
-            pure $ Right hist
+    restartChild OneForOne procMap spec = void $ newSupervisedProcess inbox procMap spec
+    restartChild OneForAll procMap _    = killAllSupervisedProcess inbox procMap *> startAllSupervisedProcess inbox procMap procSpecs
 
 -- | Ask the supervisor to spawn new temporary child process.  Returns 'Async' of the new child.
 newChild
@@ -502,7 +509,4 @@ newChild
     -> SupervisorQueue  -- ^ Inbox message queue of the supervisor to ask new process.
     -> ProcessSpec      -- ^ Supervised process specification to spawn.
     -> IO (Maybe (Async ()))
-newChild (CallTimeout usec) sv spec = do
-    r <- newEmptyTMVarIO
-    sendMessage sv $ StartChild spec r
-    timeout usec . atomically . takeTMVar $ r
+newChild timeout sv spec = call timeout sv $ StartChild spec

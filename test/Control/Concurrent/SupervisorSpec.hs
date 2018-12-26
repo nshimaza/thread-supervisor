@@ -46,15 +46,15 @@ data TickerServerCmd = Tick (ServerCallback Int)
 
 data SimpleCountingServerCmd
     = CountUp (ServerCallback Int)
-    | Finish (ServerCallback Int)
+    | Finish
 
 simpleCountingServer :: ServerQueue SimpleCountingServerCmd -> Int -> IO Int
 simpleCountingServer q n = newServer q (initializer n) cleanup handler
   where
     initializer     = pure
     cleanup _       = pure ()
-    handler s (CountUp cont)    = cont s *> pure (Right (s + 1))
-    handler s (Finish cont)     = cont s *> pure (Left s)
+    handler s (CountUp cont)    = cont s $> Right (s + 1)
+    handler s Finish            = pure (Left s)
 
 callCountUp :: ServerQueue SimpleCountingServerCmd -> IO (Maybe Int)
 callCountUp q = call def q CountUp
@@ -235,7 +235,7 @@ spec = do
             withAsync srv $ \_ -> do
                 r1 <- call def srvQ Tick
                 r1 `shouldBe` Just 0
-                cast srvQ Tick
+                callIgnore srvQ Tick
                 r2 <- call def srvQ Tick
                 r2 `shouldBe` Just 2
 
