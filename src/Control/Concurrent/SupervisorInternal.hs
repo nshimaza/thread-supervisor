@@ -28,9 +28,9 @@ import           UnliftIO            (Async, IORef, SomeException, TMVar,
                                       newEmptyTMVarIO, newIORef, newTQueueIO,
                                       newTVarIO, putTMVar, readIORef,
                                       readTQueue, readTVar, readTVarIO,
-                                      takeTMVar, timeout, tryReadTQueue,
-                                      uninterruptibleMask_, writeIORef,
-                                      writeTQueue, writeTVar)
+                                      retrySTM, takeTMVar, timeout,
+                                      tryReadTQueue, uninterruptibleMask_,
+                                      writeIORef, writeTQueue, writeTVar)
 import           UnliftIO.Concurrent (ThreadId, myThreadId)
 
 import           Data.DelayedQueue   (DelayedQueue, newEmptyDelayedQueue, pop,
@@ -46,17 +46,32 @@ data MessageQueue a = MessageQueue
     , messageQueueSaveStack :: IORef [a]    -- ^ Saved massage by 'receiveSelect'.  It keeps messages
                                             --   not selected by receiveSelect in reversed order.
                                             --   Latest message is kept at head of the list.
+    , messageQueueMaxBound  :: Word         -- ^ Maximum length of the 'MessageQueue'
     }
 
--- | Create a new empty 'MessageQueue'
+-- | Create a new empty 'MessageQueue'.
 newMessageQueue :: IO (MessageQueue a)
-newMessageQueue = MessageQueue <$> newTQueueIO <*> newTVarIO 0 <*> newIORef []
+newMessageQueue = MessageQueue <$> newTQueueIO <*> newTVarIO 0 <*> newIORef [] <*> pure maxBound
 
--- | Send a message to given 'MessageQueue'
+-- | Create a new empty 'MessageQueue' with upper bound of length.
+newBoundedMessageQueue :: Word -> IO (MessageQueue a)
+newBoundedMessageQueue upperBound = MessageQueue <$> newTQueueIO <*> newTVarIO 0 <*> newIORef [] <*> pure upperBound
+
+-- | Send a message to given 'MessageQueue'.  Block if the 'MessageQueue' is full.
 sendMessage :: MessageQueue a -> a -> IO ()
-sendMessage (MessageQueue inbox lenTVar _) msg = atomically $ do
-    modifyTVar' lenTVar succ
-    writeTQueue inbox msg
+sendMessage (MessageQueue inbox lenTVar _ limit) msg = atomically $ do
+    len <- readTVar lenTVar
+    if len < limit
+    then modifyTVar' lenTVar succ *> writeTQueue inbox msg
+    else retrySTM
+
+-- | Try to send a message to given 'MessageQueue'.  Return Nothing if the 'MessageQueue' is full.
+trySendMessage :: MessageQueue a -> a -> IO (Maybe ())
+trySendMessage (MessageQueue inbox lenTVar _ limit) msg = atomically $ do
+    len <- readTVar lenTVar
+    if len < limit
+    then modifyTVar' lenTVar succ *> writeTQueue inbox msg $> Just ()
+    else pure Nothing
 
 {-|
     Perform selective receive from given 'MessageQueue'.
@@ -71,7 +86,7 @@ receiveSelect
     :: (a -> Bool)      -- ^ Predicate to pick a interesting message.
     -> MessageQueue a   -- ^ Message queue where interesting message searched for.
     -> IO a
-receiveSelect predicate q@(MessageQueue inbox lenTVar saveStack) = do
+receiveSelect predicate q@(MessageQueue inbox lenTVar saveStack _) = do
     saved <- readIORef saveStack
     case pickFromSaveStack predicate saved of
         (Just (msg, newSaved)) -> oneMessageRemoved lenTVar saveStack newSaved $> msg
@@ -96,7 +111,7 @@ tryReceiveSelect
     :: (a -> Bool)      -- ^ Predicate to pick a interesting message.
     -> MessageQueue a   -- ^ Message queue where interesting message searched for.
     -> IO (Maybe a)
-tryReceiveSelect predicate q@(MessageQueue inbox lenTVar saveStack) = do
+tryReceiveSelect predicate q@(MessageQueue inbox lenTVar saveStack _) = do
     saved <- readIORef saveStack
     case pickFromSaveStack predicate saved of
         (Just (msg, newSaved)) -> oneMessageRemoved lenTVar saveStack newSaved $> Just msg

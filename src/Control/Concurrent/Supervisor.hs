@@ -16,7 +16,9 @@ module Control.Concurrent.Supervisor
     -- * Message queue
       MessageQueue
     , newMessageQueue
+    , newBoundedMessageQueue
     , sendMessage
+    , trySendMessage
     , receiveSelect
     , receive
     , tryReceiveSelect

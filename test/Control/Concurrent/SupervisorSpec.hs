@@ -56,8 +56,8 @@ simpleCountingServer q n = newServer q (initializer n) cleanup handler
   where
     initializer     = pure
     cleanup _       = pure ()
-    handler s (CountUp cont)    = cont s $> Right (s + 1)
-    handler s Finish            = pure (Left s)
+    handler s (CountUp cont) = cont s $> Right (s + 1)
+    handler s Finish         = pure (Left s)
 
 callCountUp :: ServerQueue SimpleCountingServerCmd -> IO (Maybe Int)
 callCountUp q = call def q CountUp
@@ -159,8 +159,8 @@ spec = do
             q <- newMessageQueue
             let evens = filter even xs :: [Int]
             withAsync (for_ xs (sendMessage q . Just) *> sendMessage q Nothing) $ \_ -> do
-                let evenOrNothing (Just n)  = even n
-                    evenOrNothing Nothing   = True
+                let evenOrNothing (Just n) = even n
+                    evenOrNothing Nothing  = True
                     go ys = do
                         maybeInt <- receiveSelect evenOrNothing q
                         case maybeInt of
@@ -229,8 +229,8 @@ spec = do
             q <- newMessageQueue
             let evens = filter even xs :: [Int]
             withAsync (for_ xs (sendMessage q . Right) *> sendMessage q (Left ())) $ \_ -> do
-                let evenOrLeft (Right n)    = even n
-                    evenOrLeft (Left _)     = True
+                let evenOrLeft (Right n) = even n
+                    evenOrLeft (Left _)  = True
                     go ys = do
                         maybeEither <- tryReceiveSelect evenOrLeft q
                         case maybeEither of
@@ -262,6 +262,32 @@ spec = do
             for_ xs $ const $ tryReceiveSelect (const False) q
             qLenAfter <- Sv.length q
             qLenBefore `shouldBe` qLenAfter
+
+    describe "BoundedMessageQueue" $ do
+        prop "sendMessage blocks when the queue is full" $ \xs -> do
+            let ys = 0:xs :: [Int]
+            q <- newBoundedMessageQueue (fromIntegral $ length ys)
+            marker1 <- newEmptyMVar
+            marker2 <- newEmptyMVar
+            let sender = do
+                    for_ ys $ sendMessage q
+                    putMVar marker1 ()
+                    sendMessage q 0
+                    putMVar marker2 ()
+            withAsync sender $ \_ -> do
+                takeMVar marker1
+                threadDelay 1000
+                mark <- isEmptyMVar marker1
+                mark `shouldBe` True
+                receive q
+                r <- takeMVar marker2
+                r `shouldBe` ()
+
+        prop "trySendMessage returns Nothing when the queue is full" $ \xs -> do
+            q <- newBoundedMessageQueue (fromIntegral $ length (xs :: [Int]))
+            for_ xs $ trySendMessage q
+            r <- trySendMessage q 0
+            r `shouldBe` Nothing
 
     describe "State machine behavior" $ do
         it "returns result when event handler returns Left" $ do
