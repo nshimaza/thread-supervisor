@@ -68,11 +68,11 @@ castFinish q = cast q Finish
 spec :: Spec
 spec = do
     describe "MessageQueue receive" $ do
-        it "receives message in sent order" $ do
+        prop "receives message in sent order" $ \xs -> do
             q <- newMessageQueue
-            for_ ['a'..'z'] $ sendMessage q
-            r <- for [1..26] $ const $ receive q
-            r `shouldBe` ['a'..'z']
+            for_ (xs :: [Int]) $ sendMessage q
+            r <- for xs $ const $ receive q
+            r `shouldBe` xs
 
         it "blocks until message available" $ do
             q <- newMessageQueue
@@ -143,7 +143,7 @@ spec = do
 
         prop "keeps entire content if predicate was never satisfied" $ \xs -> do
             q <- newMessageQueue
-            for_ (0:xs) $ sendMessage q . Just
+            for_ (xs :: [Int]) $ sendMessage q . Just
             for_ [1..2] $ \_ -> sendMessage q Nothing
             let go ys = do
                     maybeInt <- receiveSelect isNothing q
@@ -152,8 +152,8 @@ spec = do
                         Nothing -> pure $ reverse ys
             rs <- go []
             rs `shouldBe` []
-            remains <- for [0 .. length xs] $ const $ fromJust <$> receive q
-            remains `shouldBe` (0:xs :: [Int])
+            remains <- for xs $ const $ fromJust <$> receive q
+            remains `shouldBe` xs
 
         modifyMaxSuccess (const 10) $ modifyMaxSize (const 10000) $ prop "selectively reads massive number of messages concurrently" $ \xs -> do
             q <- newMessageQueue
