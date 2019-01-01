@@ -244,20 +244,24 @@ spec = do
     describe "MessageQueue length" $ do
         prop "returns number of queued messages" $ \xs -> do
             q <- newMessageQueue
-            for_ xs $ sendMessage q
+            for_ (xs :: [Int]) $ sendMessage q
             qLen <- Sv.length q
-            let srcLen = length (xs :: [Int])
-            qLen `shouldBe` fromIntegral srcLen
+            qLen `shouldBe` (fromIntegral . length) xs
 
         prop "returns number of remaining messages" $ \(xs, ys)  -> do
-            let src = 0 : xs <> ys :: [Int]
             q <- newMessageQueue
-            for_ src $ sendMessage q
-            for_ [0 .. length xs] $ const $ receive q
+            for_ (xs <> ys :: [Int]) $ sendMessage q
+            for_ xs $ const $ receive q
             qLen <- Sv.length q
             qLen `shouldBe` (fromIntegral . length) ys
 
-
+        prop "remains unchanged after failing selective receives" $ \xs -> do
+            q <- newMessageQueue
+            for_ (xs :: [Int]) $ sendMessage q
+            qLenBefore <- Sv.length q
+            for_ xs $ const $ tryReceiveSelect (const False) q
+            qLenAfter <- Sv.length q
+            qLenBefore `shouldBe` qLenAfter
 
     describe "State machine behavior" $ do
         it "returns result when event handler returns Left" $ do
