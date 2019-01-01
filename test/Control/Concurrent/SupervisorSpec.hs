@@ -23,6 +23,8 @@ import           UnliftIO.Concurrent           (ThreadId, killThread,
                                                 myThreadId, threadDelay)
 
 import           Test.Hspec
+import           Test.Hspec.QuickCheck
+import           Test.QuickCheck
 
 import           Control.Concurrent.Supervisor
 
@@ -80,6 +82,17 @@ spec = do
                 r2 <- wait a
                 r2 `shouldBe` "Hello"
 
+        modifyMaxSuccess (const 10) $ modifyMaxSize (const 100000)  $ prop "queues massive number of messages concurrently" $ \xs -> do
+            q <- newMessageQueue
+            withAsync ((for_ xs $ sendMessage q . Just) *> sendMessage q Nothing) $ \_ -> do
+                let go ys = do
+                        maybeInt <- receive q
+                        case maybeInt of
+                            Just y  -> go (y:ys)
+                            Nothing -> pure $ reverse ys
+                rs <- go []
+                rs `shouldBe` (xs :: [Int])
+
     describe "MessageQueue receiveSelect" $ do
         it "allows selective receive" $ do
             q <- newMessageQueue
@@ -126,6 +139,20 @@ spec = do
                 sendMessage q 'z'
                 r2 <- wait a
                 r2 `shouldBe` 'z'
+
+        modifyMaxSuccess (const 10) $ modifyMaxSize (const 10000) $ prop "selectively reads massive number of messages concurrently" $ \xs -> do
+            q <- newMessageQueue
+            let evens = filter even xs :: [Int]
+            withAsync ((for_ xs $ sendMessage q . Just) *> sendMessage q Nothing) $ \_ -> do
+                let evenOrNothing (Just n)  = even n
+                    evenOrNothing Nothing   = True
+                    go ys = do
+                        maybeInt <- receiveSelect evenOrNothing q
+                        case maybeInt of
+                            Just y  -> go (y:ys)
+                            Nothing -> pure $ reverse ys
+                rs <- go []
+                rs `shouldBe` evens
 
     describe "MessageQueue tryReceiveSelect" $ do
         it "returns Nothing if no message available" $ do
@@ -174,6 +201,22 @@ spec = do
             for_ ['a'..'y'] $ sendMessage q
             r <- tryReceiveSelect (== 'z') q
             r `shouldBe` Nothing
+
+        modifyMaxSuccess (const 10) $ modifyMaxSize (const 10000) $ prop "try selectively reads massive number of messages concurrently" $ \xs -> do
+            q <- newMessageQueue
+            let evens = filter even xs :: [Int]
+            withAsync ((for_ xs $ sendMessage q . Right) *> sendMessage q (Left ())) $ \_ -> do
+                let evenOrLeft (Right n)    = even n
+                    evenOrLeft (Left _)     = True
+                    go ys = do
+                        maybeEither <- tryReceiveSelect evenOrLeft q
+                        case maybeEither of
+                            Just e  -> case e of
+                                Right y -> go (y:ys)
+                                Left _  -> pure $ reverse ys
+                            Nothing -> go ys
+                rs <- go []
+                rs `shouldBe` evens
 
     describe "State machine behavior" $ do
         it "returns result when event handler returns Left" $ do

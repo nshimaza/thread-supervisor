@@ -40,15 +40,15 @@ import           Data.DelayedQueue   (DelayedQueue, newEmptyDelayedQueue, pop,
 -}
 -- | Message queue abstraction
 data MessageQueue a = MessageQueue
-    { messageQueueInbox     :: TQueue a -- ^ Concurrent queue receiving message from other threads.
-    , messageQueueSaveStack :: TVar [a] -- ^ Saved massage by `receiveSelect`.  It keeps messages
-                                        --   not selected by receiveSelect in reversed order.
-                                        --   Latest message is kept at head of the list.
+    { messageQueueInbox     :: TQueue a     -- ^ Concurrent queue receiving message from other threads.
+    , messageQueueSaveStack :: IORef [a]    -- ^ Saved massage by 'receiveSelect'.  It keeps messages
+                                            --   not selected by receiveSelect in reversed order.
+                                            --   Latest message is kept at head of the list.
     }
 
 -- | Create a new empty 'MessageQueue'
 newMessageQueue :: IO (MessageQueue a)
-newMessageQueue = MessageQueue <$> newTQueueIO <*> newTVarIO []
+newMessageQueue = MessageQueue <$> newTQueueIO <*> newIORef []
 
 -- | Send a message to given 'MessageQueue'
 sendMessage :: MessageQueue a -> a -> IO ()
@@ -67,16 +67,16 @@ receiveSelect
     :: (a -> Bool)      -- ^ Predicate to pick a interesting message.
     -> MessageQueue a   -- ^ Message queue where interesting message searched for.
     -> IO a
-receiveSelect predicate q@(MessageQueue inbox saveStack) = atomically $ do
-    saved <- readTVar saveStack
+receiveSelect predicate q@(MessageQueue inbox saveStack) = do
+    saved <- readIORef saveStack
     case pickFromSaveStack predicate saved of
-        (Just (msg, newSaved)) -> writeTVar saveStack newSaved $> msg
+        (Just (msg, newSaved)) -> writeIORef saveStack newSaved $> msg
         Nothing                -> go saved
   where
     go newSaved = do
-        msg <- readTQueue inbox
+        msg <- atomically $ readTQueue inbox
         if predicate msg
-        then writeTVar saveStack newSaved $> msg
+        then writeIORef saveStack newSaved $> msg
         else go (msg:newSaved)
 
 {-|
@@ -92,17 +92,17 @@ tryReceiveSelect
     :: (a -> Bool)      -- ^ Predicate to pick a interesting message.
     -> MessageQueue a   -- ^ Message queue where interesting message searched for.
     -> IO (Maybe a)
-tryReceiveSelect predicate q@(MessageQueue inbox saveStack) = atomically $ do
-    saved <- readTVar saveStack
+tryReceiveSelect predicate q@(MessageQueue inbox saveStack) = do
+    saved <- readIORef saveStack
     case pickFromSaveStack predicate saved of
-        (Just (msg, newSaved)) -> writeTVar saveStack newSaved $> Just msg
+        (Just (msg, newSaved)) -> writeIORef saveStack newSaved $> Just msg
         Nothing                -> go saved
   where
     go newSaved = do
-        maybeMsg <- tryReadTQueue inbox
+        maybeMsg <- atomically $ tryReadTQueue inbox
         case maybeMsg of
-            Nothing                     -> writeTVar saveStack newSaved $> Nothing
-            Just msg | predicate msg    -> writeTVar saveStack newSaved $> Just msg
+            Nothing                     -> writeIORef saveStack newSaved $> Nothing
+            Just msg | predicate msg    -> writeIORef saveStack newSaved $> Just msg
                      | otherwise        -> go (msg:newSaved)
 
 {-|
