@@ -175,7 +175,7 @@ cast
     :: ServerQueue cmd  -- ^ Message queue of the target server.
     -> cmd              -- ^ Request to the server.
     -> IO ()
-cast srv req = sendMessage srv req
+cast = sendMessage
 
 -- | Timeout of call method for server behavior in microseconds.  Default is 5 second.
 newtype CallTimeout = CallTimeout Int

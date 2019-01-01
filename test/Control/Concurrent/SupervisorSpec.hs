@@ -42,7 +42,7 @@ reasonToString  (UncaughtException e) = toStr $ fromException e
 
 data ConstServerCmd = AskFst (ServerCallback Int) | AskSnd (ServerCallback Char)
 
-data TickerServerCmd = Tick (ServerCallback Int)
+newtype TickerServerCmd = Tick (ServerCallback Int)
 
 data SimpleCountingServerCmd
     = CountUp (ServerCallback Int)
