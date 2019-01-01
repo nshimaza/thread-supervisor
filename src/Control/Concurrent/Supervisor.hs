@@ -1,3 +1,5 @@
+{-# LANGUAGE NoImplicitPrelude #-}
+
 {-|
 Module      : Control.Concurrent.Supervisor
 Copyright   : (c) Naoto Shimazaki 2018
@@ -18,6 +20,7 @@ module Control.Concurrent.Supervisor
     , receiveSelect
     , receive
     , tryReceiveSelect
+    , length
     -- * Supervisable IO action
     , Restart (..)
     , ExitReason (..)

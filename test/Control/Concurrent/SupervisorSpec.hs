@@ -26,7 +26,8 @@ import           Test.Hspec
 import           Test.Hspec.QuickCheck
 import           Test.QuickCheck
 
-import           Control.Concurrent.Supervisor
+import           Control.Concurrent.Supervisor hiding (length)
+import qualified Control.Concurrent.Supervisor as Sv (length)
 
 {-# ANN module "HLint: ignore Reduce duplication" #-}
 {-# ANN module "HLint: ignore Use head" #-}
@@ -84,7 +85,7 @@ spec = do
 
         modifyMaxSuccess (const 10) $ modifyMaxSize (const 100000)  $ prop "queues massive number of messages concurrently" $ \xs -> do
             q <- newMessageQueue
-            withAsync ((for_ xs $ sendMessage q . Just) *> sendMessage q Nothing) $ \_ -> do
+            withAsync (for_ xs (sendMessage q . Just) *> sendMessage q Nothing) $ \_ -> do
                 let go ys = do
                         maybeInt <- receive q
                         case maybeInt of
@@ -140,10 +141,24 @@ spec = do
                 r2 <- wait a
                 r2 `shouldBe` 'z'
 
+        prop "keeps entire content if predicate was never satisfied" $ \xs -> do
+            q <- newMessageQueue
+            for_ (0:xs) $ sendMessage q . Just
+            for_ [1..2] $ \_ -> sendMessage q Nothing
+            let go ys = do
+                    maybeInt <- receiveSelect isNothing q
+                    case maybeInt of
+                        Just y  -> go (y:ys)
+                        Nothing -> pure $ reverse ys
+            rs <- go []
+            rs `shouldBe` []
+            remains <- for [0 .. length xs] $ const $ fromJust <$> receive q
+            remains `shouldBe` (0:xs :: [Int])
+
         modifyMaxSuccess (const 10) $ modifyMaxSize (const 10000) $ prop "selectively reads massive number of messages concurrently" $ \xs -> do
             q <- newMessageQueue
             let evens = filter even xs :: [Int]
-            withAsync ((for_ xs $ sendMessage q . Just) *> sendMessage q Nothing) $ \_ -> do
+            withAsync (for_ xs (sendMessage q . Just) *> sendMessage q Nothing) $ \_ -> do
                 let evenOrNothing (Just n)  = even n
                     evenOrNothing Nothing   = True
                     go ys = do
@@ -202,10 +217,18 @@ spec = do
             r <- tryReceiveSelect (== 'z') q
             r `shouldBe` Nothing
 
+        prop "keeps entire content if predicate was never satisfied" $ \xs -> do
+            q <- newMessageQueue
+            for_ xs $ sendMessage q
+            rs <- for xs $ const $ tryReceiveSelect (const False) q
+            rs `shouldBe` map (const Nothing) xs
+            remains <- for xs $ const $ receive q
+            remains `shouldBe` (xs :: [Int])
+
         modifyMaxSuccess (const 10) $ modifyMaxSize (const 10000) $ prop "try selectively reads massive number of messages concurrently" $ \xs -> do
             q <- newMessageQueue
             let evens = filter even xs :: [Int]
-            withAsync ((for_ xs $ sendMessage q . Right) *> sendMessage q (Left ())) $ \_ -> do
+            withAsync (for_ xs (sendMessage q . Right) *> sendMessage q (Left ())) $ \_ -> do
                 let evenOrLeft (Right n)    = even n
                     evenOrLeft (Left _)     = True
                     go ys = do
@@ -217,6 +240,24 @@ spec = do
                             Nothing -> go ys
                 rs <- go []
                 rs `shouldBe` evens
+
+    describe "MessageQueue length" $ do
+        prop "returns number of queued messages" $ \xs -> do
+            q <- newMessageQueue
+            for_ xs $ sendMessage q
+            qLen <- Sv.length q
+            let srcLen = length (xs :: [Int])
+            qLen `shouldBe` fromIntegral srcLen
+
+        prop "returns number of remaining messages" $ \(xs, ys)  -> do
+            let src = 0 : xs <> ys :: [Int]
+            q <- newMessageQueue
+            for_ src $ sendMessage q
+            for_ [0 .. length xs] $ const $ receive q
+            qLen <- Sv.length q
+            qLen `shouldBe` (fromIntegral . length) ys
+
+
 
     describe "State machine behavior" $ do
         it "returns result when event handler returns Left" $ do

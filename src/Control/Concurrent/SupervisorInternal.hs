@@ -24,9 +24,10 @@ import           UnliftIO            (Async, IORef, SomeException, TMVar,
                                       TQueue, TVar, async, asyncThreadId,
                                       asyncWithUnmask, atomically, bracket,
                                       cancel, catch, finally, mask_,
-                                      modifyIORef', newEmptyTMVarIO, newIORef,
-                                      newTQueueIO, newTVarIO, putTMVar,
-                                      readIORef, readTQueue, readTVar,
+                                      modifyIORef', modifyTVar',
+                                      newEmptyTMVarIO, newIORef, newTQueueIO,
+                                      newTVarIO, putTMVar, readIORef,
+                                      readTQueue, readTVar, readTVarIO,
                                       takeTMVar, timeout, tryReadTQueue,
                                       uninterruptibleMask_, writeIORef,
                                       writeTQueue, writeTVar)
@@ -41,6 +42,7 @@ import           Data.DelayedQueue   (DelayedQueue, newEmptyDelayedQueue, pop,
 -- | Message queue abstraction
 data MessageQueue a = MessageQueue
     { messageQueueInbox     :: TQueue a     -- ^ Concurrent queue receiving message from other threads.
+    , messageQueueLength    :: TVar Word    -- ^ Number of elements currently held by the 'MessageQueue'.
     , messageQueueSaveStack :: IORef [a]    -- ^ Saved massage by 'receiveSelect'.  It keeps messages
                                             --   not selected by receiveSelect in reversed order.
                                             --   Latest message is kept at head of the list.
@@ -48,11 +50,13 @@ data MessageQueue a = MessageQueue
 
 -- | Create a new empty 'MessageQueue'
 newMessageQueue :: IO (MessageQueue a)
-newMessageQueue = MessageQueue <$> newTQueueIO <*> newIORef []
+newMessageQueue = MessageQueue <$> newTQueueIO <*> newTVarIO 0 <*> newIORef []
 
 -- | Send a message to given 'MessageQueue'
 sendMessage :: MessageQueue a -> a -> IO ()
-sendMessage (MessageQueue inbox _) = atomically . writeTQueue inbox
+sendMessage (MessageQueue inbox lenTVar _) msg = atomically $ do
+    modifyTVar' lenTVar succ
+    writeTQueue inbox msg
 
 {-|
     Perform selective receive from given 'MessageQueue'.
@@ -67,16 +71,22 @@ receiveSelect
     :: (a -> Bool)      -- ^ Predicate to pick a interesting message.
     -> MessageQueue a   -- ^ Message queue where interesting message searched for.
     -> IO a
-receiveSelect predicate q@(MessageQueue inbox saveStack) = do
+receiveSelect predicate q@(MessageQueue inbox lenTVar saveStack) = do
     saved <- readIORef saveStack
     case pickFromSaveStack predicate saved of
-        (Just (msg, newSaved)) -> writeIORef saveStack newSaved $> msg
+        (Just (msg, newSaved)) -> do
+            atomically $ modifyTVar' lenTVar pred
+            writeIORef saveStack newSaved
+            pure msg
         Nothing                -> go saved
   where
     go newSaved = do
         msg <- atomically $ readTQueue inbox
         if predicate msg
-        then writeIORef saveStack newSaved $> msg
+        then do
+            atomically $ modifyTVar' lenTVar pred
+            writeIORef saveStack newSaved
+            pure msg
         else go (msg:newSaved)
 
 {-|
@@ -92,17 +102,25 @@ tryReceiveSelect
     :: (a -> Bool)      -- ^ Predicate to pick a interesting message.
     -> MessageQueue a   -- ^ Message queue where interesting message searched for.
     -> IO (Maybe a)
-tryReceiveSelect predicate q@(MessageQueue inbox saveStack) = do
+tryReceiveSelect predicate q@(MessageQueue inbox lenTVar saveStack) = do
     saved <- readIORef saveStack
     case pickFromSaveStack predicate saved of
-        (Just (msg, newSaved)) -> writeIORef saveStack newSaved $> Just msg
+        (Just (msg, newSaved)) -> do
+            atomically $ modifyTVar' lenTVar pred
+            writeIORef saveStack newSaved
+            pure $ Just msg
         Nothing                -> go saved
   where
     go newSaved = do
         maybeMsg <- atomically $ tryReadTQueue inbox
         case maybeMsg of
-            Nothing                     -> writeIORef saveStack newSaved $> Nothing
-            Just msg | predicate msg    -> writeIORef saveStack newSaved $> Just msg
+            Nothing                     -> do
+                writeIORef saveStack newSaved
+                pure Nothing
+            Just msg | predicate msg    -> do
+                atomically $ modifyTVar' lenTVar pred
+                writeIORef saveStack newSaved
+                pure $ Just msg
                      | otherwise        -> go (msg:newSaved)
 
 {-|
@@ -120,7 +138,9 @@ pickFromSaveStack predicate saveStack = go [] $ reverse saveStack
 receive :: MessageQueue a -> IO a
 receive = receiveSelect (const True)
 
-
+-- | Number of elements currently held by the 'MessageQueue'.
+length:: MessageQueue a -> IO Word
+length = readTVarIO . messageQueueLength
 {-
     State machine behavior.
 -}
@@ -423,8 +443,8 @@ killAllSupervisedProcess inbox procMap = uninterruptibleMask_ $ do
     go Nothing  = pure ()
     go (Just _) = tryReceiveSelect isDownMessage inbox >>= go
 
-    isDownMessage (Down _ _)    = True
-    isDownMessage _             = False
+    isDownMessage (Down _ _) = True
+    isDownMessage _          = False
 
 -- | Restart strategy of supervisor
 data Strategy
