@@ -74,19 +74,13 @@ receiveSelect
 receiveSelect predicate q@(MessageQueue inbox lenTVar saveStack) = do
     saved <- readIORef saveStack
     case pickFromSaveStack predicate saved of
-        (Just (msg, newSaved)) -> do
-            atomically $ modifyTVar' lenTVar pred
-            writeIORef saveStack newSaved
-            pure msg
+        (Just (msg, newSaved)) -> oneMessageRemoved lenTVar saveStack newSaved $> msg
         Nothing                -> go saved
   where
     go newSaved = do
         msg <- atomically $ readTQueue inbox
         if predicate msg
-        then do
-            atomically $ modifyTVar' lenTVar pred
-            writeIORef saveStack newSaved
-            pure msg
+        then oneMessageRemoved lenTVar saveStack newSaved $> msg
         else go (msg:newSaved)
 
 {-|
@@ -105,22 +99,14 @@ tryReceiveSelect
 tryReceiveSelect predicate q@(MessageQueue inbox lenTVar saveStack) = do
     saved <- readIORef saveStack
     case pickFromSaveStack predicate saved of
-        (Just (msg, newSaved)) -> do
-            atomically $ modifyTVar' lenTVar pred
-            writeIORef saveStack newSaved
-            pure $ Just msg
+        (Just (msg, newSaved)) -> oneMessageRemoved lenTVar saveStack newSaved $> Just msg
         Nothing                -> go saved
   where
     go newSaved = do
         maybeMsg <- atomically $ tryReadTQueue inbox
         case maybeMsg of
-            Nothing                     -> do
-                writeIORef saveStack newSaved
-                pure Nothing
-            Just msg | predicate msg    -> do
-                atomically $ modifyTVar' lenTVar pred
-                writeIORef saveStack newSaved
-                pure $ Just msg
+            Nothing                     -> writeIORef saveStack newSaved $> Nothing
+            Just msg | predicate msg    -> oneMessageRemoved lenTVar saveStack newSaved $> Just msg
                      | otherwise        -> go (msg:newSaved)
 
 {-|
@@ -133,6 +119,16 @@ pickFromSaveStack predicate saveStack = go [] $ reverse saveStack
     go newSaved []                    = Nothing
     go newSaved (x:xs) | predicate x  = Just (x, foldl' (flip (:)) newSaved xs)
                        | otherwise    = go (x:newSaved) xs
+
+-- | Mutate 'MessageQueue' when a message was removed from it.
+oneMessageRemoved
+    :: TVar Word    -- ^ 'TVar' holding current number of messages in the queue.
+    -> IORef [a]    -- ^ 'IORef' to saveStack to be overwritten.
+    -> [a]          -- ^ New saveStack to mutate given IORef
+    -> IO ()
+oneMessageRemoved len saveStack newSaved = do
+    atomically $ modifyTVar' len pred
+    writeIORef saveStack newSaved
 
 -- | Receive first message in 'MassageQueue'.  Block until message available.
 receive :: MessageQueue a -> IO a
