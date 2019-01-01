@@ -92,18 +92,19 @@ it uninstalls handlers at actual dynamic thread termination.
 
 # Usage
 
+## Supervisor behavior
 TBD
 
 Implement your worker actor as a "process" which can be supervised.
 
-## High level steps to use
+### High level steps to use
 
 1. Create a `MessageQueue` for your actor
 1. Create an IO action handling the `MessageQueue`
 1. Create a `ProcessSpec` from the IO action
 1. Let a supervisor run the `ProcessSpec` in a supervised thread
 
-## Create a static process
+### Create a static process
 
 Static process is thread automatically forked when supervisor starts.
 Following procedure makes your IO action a static process.
@@ -120,7 +121,7 @@ takes restart action based on restart restart type of terminated static process.
 A supervisor can have any number of static processes.  Static processes must be
 given when supervisor is created by `newSupervisor`.
 
-### Static process example
+#### Static process example
 
 Following code creates a supervisor with two static processes.
 
@@ -140,7 +141,7 @@ the other is for `yourIOAction2`.  Because restart type of `yourIOAction1` is
 `yourIOAction1` or `yourIOAction2` terminated.  When restarting action is
 kicked, the supervisor kills remaining thread and restarts all processes again.
 
-## Create a dynamic process
+### Create a dynamic process
 
 Dynamic process is thread explicitly forked via `newChild` function.
 Following procedure runs your IO action as a dynamic process.
@@ -154,7 +155,7 @@ Dynamic processes are explicitly forked to each thread via `newChild` request to
 running supervisor.  Supervisor never restarts dynamic process.  It ignores
 restart type defined in `ProcessSpec` of dynamic process.
 
-### Dynamic process example
+#### Dynamic process example
 
 Following code runs a supervisor in different thread then request it to run a
 dynamic process.
@@ -170,8 +171,51 @@ dynamic process.
     maybeChildAsync <- newChild def svQ yourProcessSpec
 ```
 
+## Server behavior
 
-# Design Consideration
+WIP
+
+## State Machine behavior
+
+State machine behavior is most essential behavior in this package.  It provides
+framework for creating IO action of finite state machine running on its own
+thread.  State machine has single inbound `MessageQueue`, its local state, and
+a user supplied message handler.  State machine is created with initial state
+value, waits for incoming message, passes received message and current state to
+user supplied handler, updates state returned from user supplied handler, stops
+or continue to listen message queue based on what the handler returned.
+
+To create a new state machine, prepare initial state of your state machine and
+define your message handler driving your state machine, create a `MessageQueue`,
+and call `newStateMachine` with the queue, initial state, and handler.
+
+```haskell
+    stateMachineQ <- newMessageQueue
+    newStateMachine stateMachineQ yourInitialState yourHandler
+```
+
+The `newStateMachine` returns IO action which can run under its own thread.
+You can pass the IO action to low level `forkIO` or `async` but of course you
+can wrap it by newProcessSpec and let it run by Supervisor of this package.
+
+User supplied handler must have following type signature.
+
+```haskell
+handler :: (state -> message -> IO (Either result state))
+```
+
+A message was sent to given queue, handler is called with current state and
+received message.  The handler must return either result or next state.  When
+`Left` (or result) is returned, the state machine stops and returned value of
+the IO action is `IO result`.  When `Right` (or state) is returned, the state
+machine updates current state with the returned state and wait for next incoming
+message.
+
+
+
+# Design Considerations
+
+## Separate role of threads
 
 When you design thread hierarchy with this package, you have to follow design
 rule of Erlang/OTP where only supervisor can have child processes.
@@ -230,3 +274,15 @@ from dealing with asynchronous exception.
 ### No `RestForOne` strategy
 
 Only `OneForOne` and `OneForAll` restart strategy is supported.
+
+
+## Resource management
+
+The word *resource* in this context means objects kept in runtime but not
+garbage collected such like file handles, network sockets, and threads.  In
+Haskell, losing reference to those objects do *NOT* mean those objects will be
+closed or terminated.  You have to explicitly close handles and sockets,
+terminate threads before you lose reference to them.
+
+This becomes more complex under threaded GHC environment.  Under GHC, thread
+can receive asynchronous exception in any timing.
