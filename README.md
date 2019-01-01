@@ -278,11 +278,13 @@ Only `OneForOne` and `OneForAll` restart strategy is supported.
 
 ## Resource management
 
-The word *resource* in this context means objects kept in runtime but not
+The word *resource* in this context means object kept in runtime but not
 garbage collected such like file handles, network sockets, and threads.  In
 Haskell, losing reference to those objects do *NOT* mean those objects will be
 closed or terminated.  You have to explicitly close handles and sockets,
 terminate threads before you lose reference to them.
 
 This becomes more complex under threaded GHC environment.  Under GHC, thread
-can receive asynchronous exception in any timing.
+can receive asynchronous exception in any timing.  You have to cleanup resources
+when your thread received asynchronous exception as well as in case of normal
+exit and synchronous exception scenario.
