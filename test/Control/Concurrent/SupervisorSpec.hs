@@ -77,6 +77,7 @@ spec = do
         it "blocks until message available" $ do
             q <- newMessageQueue
             withAsync (receive q) $ \a -> do
+                threadDelay 1000
                 r1 <- poll a
                 r1 `shouldSatisfy` isNothing
                 sendMessage q "Hello"
@@ -267,27 +268,35 @@ spec = do
         prop "sendMessage blocks when the queue is full" $ \xs -> do
             let ys = 0:xs :: [Int]
             q <- newBoundedMessageQueue (fromIntegral $ length ys)
-            marker1 <- newEmptyMVar
-            marker2 <- newEmptyMVar
+            marker <- newEmptyMVar
             let sender = do
                     for_ ys $ sendMessage q
-                    putMVar marker1 ()
+                    putMVar marker ()
                     sendMessage q 0
-                    putMVar marker2 ()
-            withAsync sender $ \_ -> do
-                takeMVar marker1
+            withAsync sender $ \a -> do
+                takeMVar marker
                 threadDelay 1000
-                mark <- isEmptyMVar marker1
-                mark `shouldBe` True
+                r1 <- poll a
+                r1 `shouldSatisfy` isNothing
                 receive q
-                r <- takeMVar marker2
-                r `shouldBe` ()
+                r2 <- wait a
+                r2 `shouldBe` ()
 
         prop "trySendMessage returns Nothing when the queue is full" $ \xs -> do
             q <- newBoundedMessageQueue (fromIntegral $ length (xs :: [Int]))
             for_ xs $ trySendMessage q
             r <- trySendMessage q 0
             r `shouldBe` Nothing
+
+        prop "readling from queue makes room again" $ \xs -> do
+            let ys = 0:xs :: [Int]
+            q <- newBoundedMessageQueue (fromIntegral $ length ys)
+            for_ ys $ trySendMessage q
+            r1 <- trySendMessage q 0
+            r1 `shouldBe` Nothing
+            receive q
+            r2 <- trySendMessage q 1
+            r2 `shouldBe` Just ()
 
     describe "State machine behavior" $ do
         it "returns result when event handler returns Left" $ do
