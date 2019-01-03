@@ -23,7 +23,7 @@ totally a responsibility of user.
 Here one thing you need to be aware.  Garbage collection doesn't work on living
 thread.  When you lost reference to an object, garbage collector frees up the
 object for you.  However, even though you lost the thread ID of your child
-thread, Haskel runtime doesn't consider the thread is orphaned.  The child
+thread, Haskell runtime doesn't consider the thread is orphaned.  The child
 thread continue running.
 
 This is prone to create thread leakage.  You can accidentally lose thread ID of

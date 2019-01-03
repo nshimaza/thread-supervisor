@@ -39,7 +39,9 @@ import           Data.DelayedQueue   (DelayedQueue, newEmptyDelayedQueue, pop,
 {-
     Message queue and selective receive.
 -}
--- | Message queue abstraction
+{-|
+    Message queue abstraction.
+-}
 data MessageQueue a = MessageQueue
     { messageQueueInbox     :: TQueue a     -- ^ Concurrent queue receiving message from other threads.
     , messageQueueLength    :: TVar Word    -- ^ Number of elements currently held by the 'MessageQueue'.
@@ -76,11 +78,27 @@ trySendMessage (MessageQueue inbox lenTVar _ limit) msg = atomically $ do
 {-|
     Perform selective receive from given 'MessageQueue'.
 
-    'receiveSelect' seaches given queue for first interesting message predicated by user supplied function.
-    It applies the predicate to the queue, returns the first element that satisfy the predicate and
-    new MessageQueue with the element removed.
+    'receiveSelect' searches given queue for first interesting message predicated by user supplied function.
+    It applies the predicate to the queue, returns the first element that satisfy the predicate and mutates the
+    MessageQueue by removing the element found.
 
     It blocks until interesting message arrived if no interesting message was found in the queue.
+
+    __Caution__
+
+    Use this function with care.  It doesn't discard any message unsatisfying predicate but keep them in the queue for
+    future receive and the function itself blocks until interesting message arrived.  That causes your queue filled up
+    by non-interesting messages.  There is no escape hatch.
+
+    Consider using 'tryReceiveSelect' instead.
+
+    __Caveat__
+
+    Current implementation has performance caveat.  It has /O(n)/ performance characteristic where /n/ is number of
+    messages existing before your interested message appears.  It is because this function performs liner scan from the
+    top of the queue every time it is called.  It doesn't cache predicates and results you have given before.
+
+    Use this function in limited situation only.
 -}
 receiveSelect
     :: (a -> Bool)      -- ^ Predicate to pick a interesting message.
@@ -101,11 +119,19 @@ receiveSelect predicate q@(MessageQueue inbox lenTVar saveStack _) = do
 {-|
     Try to perform selective receive from given 'MessageQueue'.
 
-    'tryReceiveSelect' seaches given queue for first interesting message predicated by user supplied function.
-    It applies the predicate to the queue, returns the first element that satisfy the predicate and
-    new MessageQueue with the element removed.
+    'tryReceiveSelect' searches given queue for first interesting message predicated by user supplied function.
+    It applies the predicate to the queue, returns the first element that satisfy the predicate and mutates the
+    MessageQueue by removing the element found.
 
     It return Nothing if there is no interesting message found in the queue.
+
+    __Caveat__
+
+    Current implementation has performance caveat.  It has /O(n)/ performance characteristic where /n/ is number of
+    messages existing before your interested message appears.  It is because this function performs liner scan from the
+    top of the queue every time it is called.  It doesn't cache predicates and results you have given before.
+
+    Use this function in limited situation only.
 -}
 tryReceiveSelect
     :: (a -> Bool)      -- ^ Predicate to pick a interesting message.
@@ -145,7 +171,7 @@ oneMessageRemoved len saveStack newSaved = do
     atomically $ modifyTVar' len pred
     writeIORef saveStack newSaved
 
--- | Receive first message in 'MassageQueue'.  Block until message available.
+-- | Receive first message in 'MessageQueue'.  Block until message available.
 receive :: MessageQueue a -> IO a
 receive = receiveSelect (const True)
 
@@ -185,8 +211,9 @@ newStateMachine inbox initialState messageHandler = go $ Right initialState
 {-
     Sever behavior
 -}
--- | Type sysnonym of inbox message queue for server.
+-- | Type synonym of inbox message queue for server.
 type ServerQueue = MessageQueue
+-- | Type synonym of callback function to obtain return value.
 type ServerCallback a = (a -> IO ())
 
 -- | Create new Server behavior.
@@ -194,13 +221,13 @@ newServer
     :: ServerQueue cmd                          -- ^ Message queue of the server.
     -> IO state                                 -- ^ Initialize the server and returns initial state.
     -> (state -> IO a)                          -- ^ Cleanup the server.
-    -> (state -> cmd -> IO (Either b state))    -- ^ Messae handler.
+    -> (state -> cmd -> IO (Either b state))    -- ^ Message handler.
     -> IO b
 newServer inbox init cleanup handler = bracket init cleanup $ \state ->
     newStateMachine inbox state handler
 
 {-|
-    Send an asynchrounous request to a server.
+    Send an asynchronous request to a server.
 -}
 cast
     :: ServerQueue cmd  -- ^ Message queue of the target server.
@@ -215,7 +242,7 @@ instance Default CallTimeout where
     def = CallTimeout 5000000
 
 {-|
-    Send an synchronouse request to a server and waits for a return value until timeout.
+    Send an synchronous request to a server and waits for a return value until timeout.
 -}
 call
     :: CallTimeout              -- ^ Timeout.
@@ -234,7 +261,7 @@ call (CallTimeout usec) srv req = do
     so that calling process can continue processing instead of blocking at 'call'.
 
     Use this function with care because there is no guaranteed cancellation of background worker
-    thread other than timeout.  Giving infinite timeout (zero) to the 'Timeout' argument may cause
+    thread other than timeout.  Giving infinite timeout (zero) to the 'CallTimeout' argument may cause
     the background thread left to run, possibly indefinitely.
 -}
 callAsync
@@ -290,7 +317,7 @@ type Monitor
 
 {-|
     'ProcessSpec' is representation of IO action which can be supervised by supervisor.
-    'Supervisor' can run the IO action with separate thread, monitor its termination and
+    Supervisor can run the IO action with separate thread, monitor its termination and
     restart it based on restart type.  Additionally, user can also receive notification
     on its termination by supplying user\'s own callback functions.
 -}
