@@ -58,9 +58,7 @@ module Control.Concurrent.Supervisor
     , newStateMachine
     , CallTimeout (..)
     -- * Simple server behavior
-    , ServerQueue (..)
     , ServerCallback
-    , newServer
     , cast
     , call
     , callAsync

@@ -45,24 +45,28 @@ reasonToString  (UncaughtException e) = toStr $ fromException e
 
 data ConstServerCmd = AskFst (ServerCallback Int) | AskSnd (ServerCallback Char)
 
-newtype TickerServerCmd = Tick (ServerCallback Int)
+data TickerServerCmd = Tick (ServerCallback Int) | Tack
+
+tickerServer :: MessageQueue TickerServerCmd -> IO Int
+tickerServer q = newStateMachine q 0 handler
+  where
+    handler s (Tick cont) = cont s $> Right (s + 1)
+    handler s Tack        = pure $ Right (s + 1)
 
 data SimpleCountingServerCmd
     = CountUp (ServerCallback Int)
     | Finish
 
-simpleCountingServer :: ServerQueue SimpleCountingServerCmd -> Int -> IO Int
-simpleCountingServer q n = newServer q (initializer n) cleanup handler
+simpleCountingServer :: MessageQueue SimpleCountingServerCmd -> Int -> IO Int
+simpleCountingServer q n = newStateMachine q n handler
   where
-    initializer     = pure
-    cleanup _       = pure ()
     handler s (CountUp cont) = cont s $> Right (s + 1)
     handler s Finish         = pure (Left s)
 
-callCountUp :: ServerQueue SimpleCountingServerCmd -> IO (Maybe Int)
+callCountUp :: MessageQueue SimpleCountingServerCmd -> IO (Maybe Int)
 callCountUp q = call def q CountUp
 
-castFinish :: ServerQueue SimpleCountingServerCmd -> IO ()
+castFinish :: MessageQueue SimpleCountingServerCmd -> IO ()
 castFinish q = cast q Finish
 
 spec :: Spec
@@ -338,11 +342,9 @@ spec = do
     describe "Server" $ do
         it "has call method which return value synchronously" $ do
             srvQ <- newMessageQueue
-            let initializer         = pure (1, 'a')
-                cleanup _           = pure ()
-                handler s (AskFst cont) = cont (fst s) $> Right s
+            let handler s (AskFst cont) = cont (fst s) $> Right s
                 handler s (AskSnd cont) = cont (snd s) $> Right s
-                srv                     = newServer srvQ initializer cleanup handler
+                srv                     = newStateMachine srvQ (1, 'a') handler
             withAsync srv $ \_ -> do
                 r1 <- call def srvQ AskFst
                 r1 `shouldBe` Just 1
@@ -351,11 +353,16 @@ spec = do
 
         it "keeps its own state and cast changes the state" $ do
             srvQ <- newMessageQueue
-            let initializer = pure 0
-                cleanup _   = pure ()
-                handler s (Tick cont)   = cont s $> Right (s + 1)
-                srv                     = newServer srvQ initializer cleanup handler
-            withAsync srv $ \_ -> do
+            withAsync (tickerServer srvQ) $ \_ -> do
+                r1 <- call def srvQ Tick
+                r1 `shouldBe` Just 0
+                cast srvQ Tack
+                r2 <- call def srvQ Tick
+                r2 `shouldBe` Just 2
+
+        it "keeps its own state and callIgnore changes the state" $ do
+            srvQ <- newMessageQueue
+            withAsync (tickerServer srvQ) $ \_ -> do
                 r1 <- call def srvQ Tick
                 r1 `shouldBe` Just 0
                 callIgnore srvQ Tick
@@ -373,10 +380,8 @@ spec = do
         it "timeouts call method when server is not responding" $ do
             srvQ <- newMessageQueue
             blocker <- newEmptyMVar
-            let initializer = pure ()
-                cleanup _   = pure ()
-                handler _ _ = takeMVar blocker $> Right ()
-                srv             = newServer srvQ initializer cleanup handler
+            let handler _ _ = takeMVar blocker $> Right ()
+                srv             = newStateMachine srvQ () handler
             withAsync srv $ \_ -> do
                 r1 <- call (CallTimeout 10000) srvQ AskFst
                 (r1 :: Maybe Int) `shouldBe` Nothing
