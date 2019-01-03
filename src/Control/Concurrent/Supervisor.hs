@@ -32,8 +32,9 @@ module Control.Concurrent.Supervisor
     , newBoundedMessageQueue
     , sendMessage
     , trySendMessage
-    , receiveSelect
     , receive
+    , tryReceive
+    , receiveSelect
     , tryReceiveSelect
     , length
     -- * Supervisable IO action

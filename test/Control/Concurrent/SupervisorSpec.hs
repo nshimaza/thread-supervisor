@@ -99,6 +99,18 @@ spec = do
                 rs <- go []
                 rs `shouldBe` (xs :: [Int])
 
+    describe "MessageQueue tryReceive" $ do
+        prop "receives message in sent order" $ \xs -> do
+            q <- newMessageQueue
+            for_ (xs :: [Int]) $ sendMessage q
+            r <- for xs $ const $ tryReceive q
+            r `shouldBe` map Just xs
+
+        it "returns Nothing if no message available" $ do
+            q <- newMessageQueue :: IO (MessageQueue ())
+            r <- tryReceive q
+            r `shouldSatisfy` isNothing
+
     describe "MessageQueue receiveSelect" $ do
         it "allows selective receive" $ do
             q <- newMessageQueue

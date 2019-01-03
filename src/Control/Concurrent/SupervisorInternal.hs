@@ -175,6 +175,10 @@ oneMessageRemoved len saveStack newSaved = do
 receive :: MessageQueue a -> IO a
 receive = receiveSelect (const True)
 
+-- | Try to receive first message in 'MessageQueue'.  It returns Nothing if there is no message available.
+tryReceive :: MessageQueue a -> IO (Maybe a)
+tryReceive = tryReceiveSelect (const True)
+
 -- | Number of elements currently held by the 'MessageQueue'.
 length:: MessageQueue a -> IO Word
 length = readTVarIO . messageQueueLength
