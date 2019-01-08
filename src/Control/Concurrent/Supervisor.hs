@@ -28,15 +28,16 @@ module Control.Concurrent.Supervisor
       -- 'MessageQueue' assumes only one thread reads from a queue.  However, there is no way to prevent multiple threads
       -- read from single queue.  It is user's responsibility to ensure only one thread reads from a queue.
       MessageQueue
-    , newMessageQueue
-    , newBoundedMessageQueue
+    , MessageQueueTail
     , sendMessage
     , trySendMessage
+    , length
     , receive
     , tryReceive
     , receiveSelect
     , tryReceiveSelect
-    , length
+    -- * Actor
+    , newActor
     -- * Supervisable IO action
     , Restart (..)
     , ExitReason (..)

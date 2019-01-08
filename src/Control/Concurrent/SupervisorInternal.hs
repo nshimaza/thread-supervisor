@@ -51,29 +51,42 @@ data MessageQueue a = MessageQueue
     , messageQueueMaxBound  :: Word         -- ^ Maximum length of the 'MessageQueue'
     }
 
--- | Create a new empty 'MessageQueue'.
-newMessageQueue :: IO (MessageQueue a)
-newMessageQueue = MessageQueue <$> newTQueueIO <*> newTVarIO 0 <*> newIORef [] <*> pure maxBound
+-- | Maximum length of 'MessageQUeue'.
+newtype MessageQueueLength = MessageQueueLength Word
 
--- | Create a new empty 'MessageQueue' with upper bound of length.
-newBoundedMessageQueue :: Word -> IO (MessageQueue a)
-newBoundedMessageQueue upperBound = MessageQueue <$> newTQueueIO <*> newTVarIO 0 <*> newIORef [] <*> pure upperBound
+instance Default MessageQueueLength where
+    def = MessageQueueLength maxBound
+
+-- | Write end of 'MessageQueue' exposed to outside of actor.
+newtype MessageQueueTail a = MessageQueueTail (MessageQueue a)
+
+-- | Create a new empty 'MessageQueue'.
+newMessageQueue :: MessageQueueLength -> IO (MessageQueue a)
+newMessageQueue (MessageQueueLength upperBound) = MessageQueue <$> newTQueueIO <*> newTVarIO 0 <*> newIORef [] <*> pure upperBound
+
+-- -- | Create a new empty 'MessageQueue' with upper bound of length.
+-- newBoundedMessageQueue :: Word -> IO (MessageQueue a)
+-- newBoundedMessageQueue upperBound = MessageQueue <$> newTQueueIO <*> newTVarIO 0 <*> newIORef [] <*> pure upperBound
 
 -- | Send a message to given 'MessageQueue'.  Block if the 'MessageQueue' is full.
-sendMessage :: MessageQueue a -> a -> IO ()
-sendMessage (MessageQueue inbox lenTVar _ limit) msg = atomically $ do
+sendMessage :: MessageQueueTail a -> a -> IO ()
+sendMessage (MessageQueueTail (MessageQueue inbox lenTVar _ limit)) msg = atomically $ do
     len <- readTVar lenTVar
     if len < limit
     then modifyTVar' lenTVar succ *> writeTQueue inbox msg
     else retrySTM
 
 -- | Try to send a message to given 'MessageQueue'.  Return Nothing if the 'MessageQueue' is full.
-trySendMessage :: MessageQueue a -> a -> IO (Maybe ())
-trySendMessage (MessageQueue inbox lenTVar _ limit) msg = atomically $ do
+trySendMessage :: MessageQueueTail a -> a -> IO (Maybe ())
+trySendMessage (MessageQueueTail (MessageQueue inbox lenTVar _ limit)) msg = atomically $ do
     len <- readTVar lenTVar
     if len < limit
     then modifyTVar' lenTVar succ *> writeTQueue inbox msg $> Just ()
     else pure Nothing
+
+-- | Number of elements currently held by the 'MessageQueue'.
+length:: MessageQueueTail a -> IO Word
+length (MessageQueueTail q) = readTVarIO $ messageQueueLength q
 
 {-|
     Perform selective receive from given 'MessageQueue'.
@@ -104,7 +117,7 @@ receiveSelect
     :: (a -> Bool)      -- ^ Predicate to pick a interesting message.
     -> MessageQueue a   -- ^ Message queue where interesting message searched for.
     -> IO a
-receiveSelect predicate q@(MessageQueue inbox lenTVar saveStack _) = do
+receiveSelect predicate (MessageQueue inbox lenTVar saveStack _) = do
     saved <- readIORef saveStack
     case pickFromSaveStack predicate saved of
         (Just (msg, newSaved)) -> oneMessageRemoved lenTVar saveStack newSaved $> msg
@@ -137,7 +150,7 @@ tryReceiveSelect
     :: (a -> Bool)      -- ^ Predicate to pick a interesting message.
     -> MessageQueue a   -- ^ Message queue where interesting message searched for.
     -> IO (Maybe a)
-tryReceiveSelect predicate q@(MessageQueue inbox lenTVar saveStack _) = do
+tryReceiveSelect predicate (MessageQueue inbox lenTVar saveStack _) = do
     saved <- readIORef saveStack
     case pickFromSaveStack predicate saved of
         (Just (msg, newSaved)) -> oneMessageRemoved lenTVar saveStack newSaved $> Just msg
@@ -179,9 +192,21 @@ receive = receiveSelect (const True)
 tryReceive :: MessageQueue a -> IO (Maybe a)
 tryReceive = tryReceiveSelect (const True)
 
--- | Number of elements currently held by the 'MessageQueue'.
-length:: MessageQueue a -> IO Word
-length = readTVarIO . messageQueueLength
+
+type ActorHandler a b = (MessageQueue a -> IO b)
+
+{-|
+    Create a new actor.
+-}
+newActor
+    :: MessageQueueLength
+    -> ActorHandler a b
+    -> IO (MessageQueueTail a, IO b)
+newActor maxQLen handler = do
+    q <- newMessageQueue maxQLen
+    pure (MessageQueueTail q, handler q)
+
+
 {-
     State machine behavior.
 -}
@@ -201,12 +226,11 @@ length = readTVarIO . messageQueueLength
     the state machine will dead lock.
 -}
 newStateMachine
-    :: MessageQueue message -- ^ Event input queue of the state machine.
-    -> state                -- ^ Initial state of the state machine.
+    :: state    -- ^ Initial state of the state machine.
     -> (state -> message -> IO (Either result state))
-                            -- ^ Message handler which processes event and returns result or next state.
-    -> IO result            -- ^ Return value when the state machine terminated.
-newStateMachine inbox initialState messageHandler = go $ Right initialState
+                -- ^ Message handler which processes event and returns result or next state.
+    -> ActorHandler message result
+newStateMachine initialState messageHandler inbox = go $ Right initialState
   where
     go (Right state) = go =<< mask_ (messageHandler state =<< receive inbox)
     go (Left result) = pure result
@@ -222,8 +246,8 @@ type ServerCallback a = (a -> IO ())
     Send an asynchronous request to a server.
 -}
 cast
-    :: MessageQueue cmd -- ^ Message queue of the target server.
-    -> cmd              -- ^ Request to the server.
+    :: MessageQueueTail cmd -- ^ Message queue of the target server.
+    -> cmd                  -- ^ Request to the server.
     -> IO ()
 cast = sendMessage
 
@@ -238,7 +262,7 @@ instance Default CallTimeout where
 -}
 call
     :: CallTimeout              -- ^ Timeout.
-    -> MessageQueue cmd         -- ^ Message queue of the target server.
+    -> MessageQueueTail cmd     -- ^ Message queue of the target server.
     -> ((a -> IO ()) -> cmd)    -- ^ Request to the server without callback supplied.
     -> IO (Maybe a)
 call (CallTimeout usec) srv req = do
@@ -258,7 +282,7 @@ call (CallTimeout usec) srv req = do
 -}
 callAsync
     :: CallTimeout              -- ^ Timeout.
-    -> MessageQueue cmd         -- ^ Message queue.
+    -> MessageQueueTail cmd     -- ^ Message queue.
     -> ((a -> IO ()) -> cmd)    -- ^ Request to the server without callback supplied.
     -> (Maybe a -> IO b)        -- ^ callback to process return value of the call.  Nothing is given on timeout.
     -> IO (Async b)
@@ -268,7 +292,7 @@ callAsync timeout srv req cont = async $ call timeout srv req >>= cont
     Send an request to a server but ignore return value.
 -}
 callIgnore
-    :: MessageQueue cmd         -- ^ Message queue of the target server.
+    :: MessageQueueTail cmd     -- ^ Message queue of the target server.
     -> ((a -> IO ()) -> cmd)    -- ^ Request to the server without callback supplied.
     -> IO ()
 callIgnore srv req = sendMessage srv $ req (\_ -> pure ())
@@ -433,7 +457,8 @@ data SupervisorMessage
     | StartChild ProcessSpec (ServerCallback (Async ()))    -- ^ Command to start a new supervised thread.
 
 -- | Type synonym for inbox message queue of supervisor.
-type SupervisorQueue = MessageQueue SupervisorMessage
+type SupervisorQueue = MessageQueueTail SupervisorMessage
+type SupervisorInbox = MessageQueue SupervisorMessage
 
 -- | Start a new thread with supervision.
 newSupervisedProcess
@@ -452,10 +477,10 @@ startAllSupervisedProcess
     -> ProcessMap       -- ^ Map of current live processes which the supervisor monitors.
     -> [ProcessSpec]    -- ^ List of process specifications to be started.
     -> IO ()
-startAllSupervisedProcess inbox procMap = traverse_ $ newSupervisedProcess inbox procMap
+startAllSupervisedProcess sv procMap = traverse_ $ newSupervisedProcess sv procMap
 
 -- | Kill all running threads supervised by the supervisor represented by 'SupervisorQueue'.
-killAllSupervisedProcess :: SupervisorQueue -> ProcessMap -> IO ()
+killAllSupervisedProcess :: SupervisorInbox -> ProcessMap -> IO ()
 killAllSupervisedProcess inbox procMap = uninterruptibleMask_ $ do
     pmap <- readIORef procMap
     for_ (elems pmap) $ cancel . fst
@@ -486,8 +511,10 @@ data Strategy
     When it started, it has no child threads.  Only 'newChild' can add new thread supervised by the supervisor.
     Thus the simple one-for-one supervisor only manages dynamic and 'Temporary' children.
 -}
-newSimpleOneForOneSupervisor :: SupervisorQueue -> IO ()
-newSimpleOneForOneSupervisor inbox = newSupervisor inbox OneForOne def []
+newSimpleOneForOneSupervisor :: ActorHandler SupervisorMessage ()
+newSimpleOneForOneSupervisor = newSupervisor OneForOne def []
+
+-- data Supervisor = Supervisor SupervisorQueue IntenseRestartDetector
 
 {-|
     Create a supervisor.
@@ -511,16 +538,15 @@ newSimpleOneForOneSupervisor inbox = newSupervisor inbox OneForOne def []
     the state machine will dead lock.
 -}
 newSupervisor
-    :: SupervisorQueue      -- ^ Inbox message queue of the supervisor.
-    -> Strategy             -- ^ Restarting strategy of monitored processes.  'OneForOne' or 'OneForAll'.
+    :: Strategy             -- ^ Restarting strategy of monitored processes.  'OneForOne' or 'OneForAll'.
     -> RestartSensitivity   -- ^ Restart intensity sensitivity in restart count and period.
     -> [ProcessSpec]        -- ^ List of supervised process specifications.
-    -> IO ()
-newSupervisor inbox strategy restartSensitivity procSpecs = bracket newProcessMap (killAllSupervisedProcess inbox) initSupervisor
+    -> ActorHandler SupervisorMessage ()
+newSupervisor strategy restartSensitivity procSpecs inbox = bracket newProcessMap (killAllSupervisedProcess inbox) initSupervisor
   where
     initSupervisor procMap = do
-        startAllSupervisedProcess inbox procMap procSpecs
-        newStateMachine inbox (newIntenseRestartDetector restartSensitivity) handler
+        startAllSupervisedProcess (MessageQueueTail inbox) procMap procSpecs
+        newStateMachine (newIntenseRestartDetector restartSensitivity) handler inbox
       where
         handler :: IntenseRestartDetector -> SupervisorMessage -> IO (Either () IntenseRestartDetector)
         handler hist (Down reason tid) = do
@@ -545,10 +571,12 @@ newSupervisor inbox strategy restartSensitivity procSpecs = bracket newProcessMa
             restartNeeded _         _      = True
 
         handler hist (StartChild (ProcessSpec monitors _ proc) cont) =
-            (newSupervisedProcess inbox procMap (ProcessSpec monitors Temporary proc) >>= cont) $> Right hist
+            (newSupervisedProcess (MessageQueueTail inbox) procMap (ProcessSpec monitors Temporary proc) >>= cont) $> Right hist
 
-        restartChild OneForOne procMap spec = void $ newSupervisedProcess inbox procMap spec
-        restartChild OneForAll procMap _    = killAllSupervisedProcess inbox procMap *> startAllSupervisedProcess inbox procMap procSpecs
+        restartChild OneForOne procMap spec = void $ newSupervisedProcess (MessageQueueTail inbox) procMap spec
+        restartChild OneForAll procMap _    = do
+            killAllSupervisedProcess inbox procMap
+            startAllSupervisedProcess (MessageQueueTail inbox) procMap procSpecs
 
 -- | Ask the supervisor to spawn new temporary child process.  Returns 'Async' of the new child.
 newChild

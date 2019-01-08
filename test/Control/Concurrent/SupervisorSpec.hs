@@ -1,24 +1,25 @@
 module Control.Concurrent.SupervisorSpec where
 
-import           Data.Char                     (chr, ord)
 import           Data.Default                  (def)
 import           Data.Foldable                 (for_)
 import           Data.Functor                  (($>))
 import           Data.List                     (unzip4)
-import           Data.Maybe                    (fromJust, isJust, isNothing)
+import           Data.Maybe                    (isJust, isNothing)
 import           Data.Traversable              (for)
 import           Data.Typeable                 (typeOf)
 import           System.Clock                  (Clock (Monotonic),
                                                 TimeSpec (..), getTime,
                                                 toNanoSecs)
 import           UnliftIO                      (StringException (..), async,
-                                                asyncThreadId, atomically,
-                                                cancel, fromException,
-                                                isEmptyMVar, newEmptyMVar,
+                                                asyncThreadId,
+                                                atomically, cancel,
+                                                fromException, isEmptyMVar,
+                                                newEmptyMVar, newTQueueIO,
                                                 newTVarIO, poll, putMVar,
-                                                readMVar, readTVarIO, takeMVar,
+                                                readMVar, readTQueue,
+                                                readTVarIO, takeMVar,
                                                 throwString, wait, withAsync,
-                                                writeTVar)
+                                                writeTQueue, writeTVar)
 import           UnliftIO.Concurrent           (ThreadId, killThread,
                                                 myThreadId, threadDelay)
 
@@ -48,7 +49,7 @@ data ConstServerCmd = AskFst (ServerCallback Int) | AskSnd (ServerCallback Char)
 data TickerServerCmd = Tick (ServerCallback Int) | Tack
 
 tickerServer :: MessageQueue TickerServerCmd -> IO Int
-tickerServer q = newStateMachine q 0 handler
+tickerServer = newStateMachine 0 handler
   where
     handler s (Tick cont) = cont s $> Right (s + 1)
     handler s Tack        = pure $ Right (s + 1)
@@ -57,306 +58,67 @@ data SimpleCountingServerCmd
     = CountUp (ServerCallback Int)
     | Finish
 
-simpleCountingServer :: MessageQueue SimpleCountingServerCmd -> Int -> IO Int
-simpleCountingServer q n = newStateMachine q n handler
+simpleCountingServer :: Int -> MessageQueue SimpleCountingServerCmd -> IO Int
+simpleCountingServer n = newStateMachine n handler
   where
     handler s (CountUp cont) = cont s $> Right (s + 1)
     handler s Finish         = pure (Left s)
 
-callCountUp :: MessageQueue SimpleCountingServerCmd -> IO (Maybe Int)
+callCountUp :: MessageQueueTail SimpleCountingServerCmd -> IO (Maybe Int)
 callCountUp q = call def q CountUp
 
-castFinish :: MessageQueue SimpleCountingServerCmd -> IO ()
+castFinish :: MessageQueueTail SimpleCountingServerCmd -> IO ()
 castFinish q = cast q Finish
 
 spec :: Spec
 spec = do
-    describe "MessageQueue receive" $ do
-        prop "receives message in sent order" $ \xs -> do
-            q <- newMessageQueue
-            for_ (xs :: [Int]) $ sendMessage q
-            r <- for xs $ const $ receive q
-            r `shouldBe` xs
-
-        it "blocks until message available" $ do
-            q <- newMessageQueue
-            withAsync (receive q) $ \a -> do
-                threadDelay 1000
-                r1 <- poll a
-                r1 `shouldSatisfy` isNothing
-                sendMessage q "Hello"
-                r2 <- wait a
-                r2 `shouldBe` "Hello"
-
-        modifyMaxSuccess (const 10) $ modifyMaxSize (const 100000)  $ prop "queues massive number of messages concurrently" $ \xs -> do
-            q <- newMessageQueue
-            withAsync (for_ xs (sendMessage q . Just) *> sendMessage q Nothing) $ \_ -> do
-                let go ys = do
-                        maybeInt <- receive q
-                        case maybeInt of
-                            Just y  -> go (y:ys)
-                            Nothing -> pure $ reverse ys
-                rs <- go []
-                rs `shouldBe` (xs :: [Int])
-
-    describe "MessageQueue tryReceive" $ do
-        prop "receives message in sent order" $ \xs -> do
-            q <- newMessageQueue
-            for_ (xs :: [Int]) $ sendMessage q
-            r <- for xs $ const $ tryReceive q
-            r `shouldBe` map Just xs
-
-        it "returns Nothing if no message available" $ do
-            q <- newMessageQueue :: IO (MessageQueue ())
-            r <- tryReceive q
-            r `shouldSatisfy` isNothing
-
-    describe "MessageQueue receiveSelect" $ do
-        it "allows selective receive" $ do
-            q <- newMessageQueue
-
-            for_ ['a'..'z'] $ sendMessage q
-            r1 <- receiveSelect (== 'a') q
-            r1 `shouldBe` 'a'
-            r2 <- for [1..25] $ const $ receive q
-            r2 `shouldBe` ['b'..'z']
-
-            for_ ['a'..'z'] $ sendMessage q
-            r3 <- receiveSelect (== 'h') q
-            r3 `shouldBe` 'h'
-            r4 <- for [1..25] $ const $ receive q
-            r4 `shouldBe` ['a'..'g'] <> ['i'..'z']
-
-            for_ ['a'..'z'] $ sendMessage q
-            r5 <- receiveSelect (== 'z') q
-            r5 `shouldBe` 'z'
-            r6 <- for [1..25] $ const $ receive q
-            r6 `shouldBe` ['a'..'y']
-
-            for_ [ord 'b' .. ord 'y'] $ \i -> do
-                for_ ['a'..'z'] $ sendMessage q
-                r7 <- receiveSelect (== chr i) q
-                ord r7 `shouldBe` i
-                r8 <- for [1..25] $ const $ receive q
-                r8 `shouldBe` ['a' .. chr (i - 1)] <> [chr (i + 1) .. 'z']
-
-        it "returns the first element satisfying supplied predicate" $ do
-            q <- newMessageQueue
-            for_ "abcdefabcdef" $ sendMessage q
-            r1 <- receiveSelect (\c -> c == 'c' || c == 'd' || c == 'e') q
-            r1 `shouldBe` 'c'
-            r2 <- for [1..11] $ const $ receive q
-            r2 `shouldBe` "abdefabcdef"
-
-        it "blocks until interesting message arrived" $ do
-            q <- newMessageQueue
-            for_ ['a'..'y'] $ sendMessage q
-            withAsync (receiveSelect (== 'z') q) $ \a -> do
-                r1 <- poll a
-                r1 `shouldSatisfy` isNothing
-                sendMessage q 'z'
-                r2 <- wait a
-                r2 `shouldBe` 'z'
-
-        prop "keeps entire content if predicate was never satisfied" $ \xs -> do
-            q <- newMessageQueue
-            for_ (xs :: [Int]) $ sendMessage q . Just
-            for_ [1..2] $ \_ -> sendMessage q Nothing
-            let go ys = do
-                    maybeInt <- receiveSelect isNothing q
-                    case maybeInt of
-                        Just y  -> go (y:ys)
-                        Nothing -> pure $ reverse ys
-            rs <- go []
-            rs `shouldBe` []
-            remains <- for xs $ const $ fromJust <$> receive q
-            remains `shouldBe` xs
-
-        modifyMaxSuccess (const 10) $ modifyMaxSize (const 10000) $ prop "selectively reads massive number of messages concurrently" $ \xs -> do
-            q <- newMessageQueue
-            let evens = filter even xs :: [Int]
-            withAsync (for_ xs (sendMessage q . Just) *> sendMessage q Nothing) $ \_ -> do
-                let evenOrNothing (Just n) = even n
-                    evenOrNothing Nothing  = True
-                    go ys = do
-                        maybeInt <- receiveSelect evenOrNothing q
-                        case maybeInt of
-                            Just y  -> go (y:ys)
-                            Nothing -> pure $ reverse ys
-                rs <- go []
-                rs `shouldBe` evens
-
-    describe "MessageQueue tryReceiveSelect" $ do
-        it "returns Nothing if no message available" $ do
-            q <- newMessageQueue
-            r <- tryReceiveSelect (const True) q
-            r `shouldBe` (Nothing :: Maybe Int)
-
-        it "allows selective receive" $ do
-            q <- newMessageQueue
-
-            for_ ['a'..'z'] $ sendMessage q
-            r1 <- tryReceiveSelect (== 'a') q
-            r1 `shouldBe` Just 'a'
-            r2 <- for [1..25] $ const $ receive q
-            r2 `shouldBe` ['b'..'z']
-
-            for_ ['a'..'z'] $ sendMessage q
-            r3 <- tryReceiveSelect (== 'h') q
-            r3 `shouldBe` Just 'h'
-            r4 <- for [1..25] $ const $ receive q
-            r4 `shouldBe` (['a'..'g'] <> ['i'..'z'])
-
-            for_ ['a'..'z'] $ sendMessage q
-            r5 <- tryReceiveSelect (== 'z') q
-            r5 `shouldBe` Just 'z'
-            r6 <- for [1..25] $ const $ receive q
-            r6 `shouldBe` ['a'..'y']
-
-            for_ [ord 'b' .. ord 'y'] $ \i -> do
-                for_ ['a'..'z'] $ sendMessage q
-                r7 <- tryReceiveSelect (== chr i) q
-                r7 `shouldBe` Just (chr i)
-                r8 <- for [1..25] $ const $ receive q
-                r8 `shouldBe` (['a' .. chr (i - 1)] <> [chr (i + 1) .. 'z'])
-
-        it "returns the first element satisfying supplied predicate" $ do
-            q <- newMessageQueue
-            for_ "abcdefabcdef" $ sendMessage q
-            r1 <- tryReceiveSelect (\c -> c == 'c' || c == 'd' || c == 'e') q
-            r1 `shouldBe` Just 'c'
-            r2 <- for [1..11] $ const $ receive q
-            r2 `shouldBe` "abdefabcdef"
-
-        it "return Nothing when there is no interesting message in the queue" $ do
-            q <- newMessageQueue
-            for_ ['a'..'y'] $ sendMessage q
-            r <- tryReceiveSelect (== 'z') q
-            r `shouldBe` Nothing
-
-        prop "keeps entire content if predicate was never satisfied" $ \xs -> do
-            q <- newMessageQueue
-            for_ xs $ sendMessage q
-            rs <- for xs $ const $ tryReceiveSelect (const False) q
-            rs `shouldBe` map (const Nothing) xs
-            remains <- for xs $ const $ receive q
-            remains `shouldBe` (xs :: [Int])
-
-        modifyMaxSuccess (const 10) $ modifyMaxSize (const 10000) $ prop "try selectively reads massive number of messages concurrently" $ \xs -> do
-            q <- newMessageQueue
-            let evens = filter even xs :: [Int]
-            withAsync (for_ xs (sendMessage q . Right) *> sendMessage q (Left ())) $ \_ -> do
-                let evenOrLeft (Right n) = even n
-                    evenOrLeft (Left _)  = True
-                    go ys = do
-                        maybeEither <- tryReceiveSelect evenOrLeft q
-                        case maybeEither of
-                            Just e  -> case e of
-                                Right y -> go (y:ys)
-                                Left _  -> pure $ reverse ys
-                            Nothing -> go ys
-                rs <- go []
-                rs `shouldBe` evens
-
-    describe "MessageQueue length" $ do
-        prop "returns number of queued messages" $ \xs -> do
-            q <- newMessageQueue
-            for_ (xs :: [Int]) $ sendMessage q
-            qLen <- Sv.length q
-            qLen `shouldBe` (fromIntegral . length) xs
-
-        prop "returns number of remaining messages" $ \(xs, ys)  -> do
-            q <- newMessageQueue
-            for_ (xs <> ys :: [Int]) $ sendMessage q
-            for_ xs $ const $ receive q
-            qLen <- Sv.length q
-            qLen `shouldBe` (fromIntegral . length) ys
-
-        prop "remains unchanged after failing selective receives" $ \xs -> do
-            q <- newMessageQueue
-            for_ (xs :: [Int]) $ sendMessage q
-            qLenBefore <- Sv.length q
-            for_ xs $ const $ tryReceiveSelect (const False) q
-            qLenAfter <- Sv.length q
-            qLenBefore `shouldBe` qLenAfter
-
-    describe "BoundedMessageQueue" $ do
-        prop "sendMessage blocks when the queue is full" $ \xs -> do
-            let ys = 0:xs :: [Int]
-            q <- newBoundedMessageQueue (fromIntegral $ length ys)
-            marker <- newEmptyMVar
-            let sender = do
-                    for_ ys $ sendMessage q
-                    putMVar marker ()
-                    sendMessage q 0
-            withAsync sender $ \a -> do
-                takeMVar marker
-                threadDelay 1000
-                r1 <- poll a
-                r1 `shouldSatisfy` isNothing
-                receive q
-                r2 <- wait a
-                r2 `shouldBe` ()
-
-        prop "trySendMessage returns Nothing when the queue is full" $ \xs -> do
-            q <- newBoundedMessageQueue (fromIntegral $ length (xs :: [Int]))
-            for_ xs $ trySendMessage q
-            r <- trySendMessage q 0
-            r `shouldBe` Nothing
-
-        prop "readling from queue makes room again" $ \xs -> do
-            let ys = 0:xs :: [Int]
-            q <- newBoundedMessageQueue (fromIntegral $ length ys)
-            for_ ys $ trySendMessage q
-            r1 <- trySendMessage q 0
-            r1 `shouldBe` Nothing
-            receive q
-            r2 <- trySendMessage q 1
-            r2 `shouldBe` Just ()
+    describe "Actor" $ do
+        prop "accepts ActorHandler and returns action with MessageQueueTail" $ \n -> do
+            mark <- newEmptyMVar
+            (qtail, action) <- newActor def receive
+            sendMessage qtail (n :: Int)
+            r2 <- action
+            r2 `shouldBe` n
 
     describe "State machine behavior" $ do
         it "returns result when event handler returns Left" $ do
-            q <- newMessageQueue
-            let statem = newStateMachine q () $ \_ _ -> pure $ Left "Hello"
-            sendMessage q ()
+            (qtail, statem) <- newActor def $ newStateMachine () $ \_ _ -> pure $ Left "Hello"
+            sendMessage qtail ()
             r <- statem
             r `shouldBe` "Hello"
 
         it "consumes message in the queue until exit" $ do
-            q <- newMessageQueue
-            let until5 _ 5 = pure $ Left "Done"
-                until5 _ _ = pure $ Right ()
-                statem     = newStateMachine q () until5
-            for_ [1..7] $ sendMessage q
-            r <- statem
+            let until5 q 5 = pure $ Left ("Done", q)
+                until5 q _ = pure $ Right q
+                actorHandler inbox = newStateMachine inbox until5 inbox
+            (qtail, statem) <- newActor def actorHandler
+            for_ [1..7] $ sendMessage qtail
+            (r, lastQ) <- statem
             r `shouldBe` "Done"
-            msg <- receive q
+            msg <- receive lastQ
             msg `shouldBe` 6
 
         it "passes next state with Right" $ do
-            q <- newMessageQueue
             let handler True  _ = pure $ Right False
                 handler False _ = pure $ Left "Finished"
-                statem          = newStateMachine q True handler
-            for_ [(), ()] $ sendMessage q
+            (qtail, statem) <- newActor def $ newStateMachine True handler
+            for_ [(), ()] $ sendMessage qtail
             r <- statem
             r `shouldBe` "Finished"
 
         it "runs state machine by consuming messages until handler returns Left" $ do
-            q <- newMessageQueue
             let handler n 10 = pure $ Left (n + 10)
                 handler n x  = pure $ Right (n + x)
-                statem       = newStateMachine q 0 handler
-            for_ [1..100] $ sendMessage q
+            (qtail, statem) <- newActor def $ newStateMachine 0 handler
+            for_ [1..100] $ sendMessage qtail
             r <- statem
             r `shouldBe` 55
 
     describe "Server" $ do
         it "has call method which return value synchronously" $ do
-            srvQ <- newMessageQueue
             let handler s (AskFst cont) = cont (fst s) $> Right s
                 handler s (AskSnd cont) = cont (snd s) $> Right s
-                srv                     = newStateMachine srvQ (1, 'a') handler
+            (srvQ, srv) <- newActor def $ newStateMachine (1, 'a') handler
             withAsync srv $ \_ -> do
                 r1 <- call def srvQ AskFst
                 r1 `shouldBe` Just 1
@@ -364,8 +126,8 @@ spec = do
                 r2 `shouldBe` Just 'a'
 
         it "keeps its own state and cast changes the state" $ do
-            srvQ <- newMessageQueue
-            withAsync (tickerServer srvQ) $ \_ -> do
+            (srvQ, srv) <- newActor def tickerServer
+            withAsync srv $ \_ -> do
                 r1 <- call def srvQ Tick
                 r1 `shouldBe` Just 0
                 cast srvQ Tack
@@ -373,8 +135,8 @@ spec = do
                 r2 `shouldBe` Just 2
 
         it "keeps its own state and callIgnore changes the state" $ do
-            srvQ <- newMessageQueue
-            withAsync (tickerServer srvQ) $ \_ -> do
+            (srvQ, srv) <- newActor def tickerServer
+            withAsync srv $ \_ -> do
                 r1 <- call def srvQ Tick
                 r1 `shouldBe` Just 0
                 callIgnore srvQ Tick
@@ -382,18 +144,17 @@ spec = do
                 r2 `shouldBe` Just 2
 
         it "keeps its own state and call can change the state" $ do
-            srvQ <- newMessageQueue
-            withAsync (simpleCountingServer srvQ 0) $ \_ -> do
+            (srvQ, srv) <- newActor def $ simpleCountingServer 0
+            withAsync (srv) $ \_ -> do
                 r1 <- callCountUp srvQ
                 r1 `shouldBe` Just 0
                 r2 <- callCountUp srvQ
                 r2 `shouldBe` Just 1
 
         it "timeouts call method when server is not responding" $ do
-            srvQ <- newMessageQueue
             blocker <- newEmptyMVar
             let handler _ _ = takeMVar blocker $> Right ()
-                srv             = newStateMachine srvQ () handler
+            (srvQ, srv) <- newActor def $ newStateMachine () handler
             withAsync srv $ \_ -> do
                 r1 <- call (CallTimeout 10000) srvQ AskFst
                 (r1 :: Maybe Int) `shouldBe` Nothing
@@ -404,9 +165,9 @@ spec = do
             mark <- newEmptyMVar
             blocker <- newEmptyMVar
             var <- newTVarIO (0 :: Int)
-            sv <- newMessageQueue
-            withAsync (newSimpleOneForOneSupervisor sv) $ \_ -> do
-                maybeChildAsync <- newChild def sv $ newProcessSpec [] Temporary $ do
+            (svQ, sv) <- newActor def newSimpleOneForOneSupervisor
+            withAsync sv $ \_ -> do
+                maybeChildAsync <- newChild def svQ $ newProcessSpec [] Temporary $ do
                     readMVar trigger
                     atomically $ writeTVar var 1
                     putMVar mark ()
@@ -421,11 +182,11 @@ spec = do
                 currentVal1 `shouldBe` 1
 
         it "does not restart finished dynamic child regardless restart type" $ do
-            sv <- newMessageQueue
-            withAsync (newSimpleOneForOneSupervisor sv) $ \_ -> for_ [Permanent, Transient, Temporary] $ \restart -> do
+            (svQ, sv) <- newActor def newSimpleOneForOneSupervisor
+            withAsync sv $ \_ -> for_ [Permanent, Transient, Temporary] $ \restart -> do
                 mark <- newEmptyMVar
                 trigger <- newEmptyMVar
-                Just a <- newChild def sv $ newProcessSpec [] restart $ do
+                Just a <- newChild def svQ $ newProcessSpec [] restart $ do
                     putMVar mark ()
                     readMVar trigger
                     pure ()
@@ -437,29 +198,29 @@ spec = do
                 r `shouldBe` True
 
         it "does not exit itself by massive child crash" $ do
-            sv <- newMessageQueue
-            withAsync (newSimpleOneForOneSupervisor sv) $ \a -> do
+            (svQ, sv) <- newActor def newSimpleOneForOneSupervisor
+            withAsync sv $ \a -> do
                 blocker <- newEmptyMVar
                 for_ [1..10] $ \_ -> do
-                    Just a <- newChild def sv $ newProcessSpec [] Permanent $ readMVar blocker $> ()
+                    Just a <- newChild def svQ $ newProcessSpec [] Permanent $ readMVar blocker $> ()
                     cancel a
                 threadDelay 1000
                 r <- poll a
                 r `shouldSatisfy` isNothing
-                maybeAsync <- newChild def sv $ newProcessSpec [] Permanent $ readMVar blocker $> ()
+                maybeAsync <- newChild def svQ $ newProcessSpec [] Permanent $ readMVar blocker $> ()
                 isJust maybeAsync `shouldBe` True
 
         it "kills all children when it is killed" $ do
             rs <- for [1..10] $ \n -> do
-                childQ <- newMessageQueue
                 childMon <- newEmptyMVar
+                (childQ, child) <- (newActor def $ simpleCountingServer n)
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec [monitor] Temporary $ simpleCountingServer childQ n $> ()
+                    process             = newProcessSpec [monitor] Temporary $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
-            sv <- newMessageQueue
-            withAsync (newSimpleOneForOneSupervisor sv) $ \_ -> do
-                for_ procs $ newChild def sv
+            (svQ, sv) <- newActor def newSimpleOneForOneSupervisor
+            withAsync sv $ \_ -> do
+                for_ procs $ newChild def svQ
                 rs <- for childQs callCountUp
                 rs `shouldBe` Just <$> [1..10]
             reports <- for childMons takeMVar
@@ -468,15 +229,16 @@ spec = do
         it "can be killed when children is finishing at the same time" $ do
             let volume = 1000
             rs <- for [1..volume] $ \n -> do
-                childQ <- newMessageQueue
+                -- childQ <- newMessageQueue
                 childMon <- newEmptyMVar
+                (childQ, child) <- (newActor def $ simpleCountingServer n)
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec [monitor] Temporary $ simpleCountingServer childQ n $> ()
+                    process             = newProcessSpec [monitor] Temporary $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
-            sv <- newMessageQueue
-            withAsync (newSimpleOneForOneSupervisor sv) $ \_ -> do
-                for_ procs $ newChild def sv
+            (svQ, sv) <- newActor def newSimpleOneForOneSupervisor
+            withAsync sv $ \_ -> do
+                for_ procs $ newChild def svQ
                 rs <- for childQs callCountUp
                 rs `shouldBe` Just <$> [1..volume]
                 async $ for_ childQs $ \ch -> threadDelay 1 *> castFinish ch
@@ -561,14 +323,14 @@ spec = do
     describe "One-for-one Supervisor with static childlen" $ do
         it "automatically starts children based on given ProcessSpec list" $ do
             rs <- for [1,2,3] $ \n -> do
-                childQ <- newMessageQueue
                 childMon <- newEmptyMVar
+                (childQ, child) <- newActor def $ simpleCountingServer n
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec [monitor] Permanent $ simpleCountingServer childQ n $> ()
+                    process             = newProcessSpec [monitor] Permanent $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForOne def procs) $ \_ -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForOne def procs
+            withAsync sv $ \_ -> do
                 rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1,2,3]
                 rs2 <- for childQs callCountUp
@@ -576,14 +338,14 @@ spec = do
 
         it "automatically restarts finished children with permanent restart type" $ do
             rs <- for [1,2,3] $ \n -> do
-                childQ <- newMessageQueue
                 childMon <- newEmptyMVar
+                (childQ, child) <- newActor def $ simpleCountingServer n
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec [monitor] Permanent $ simpleCountingServer childQ n $> ()
+                    process             = newProcessSpec [monitor] Permanent $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForOne def { restartSensitivityIntensity = 3 } procs) $ \_ -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForOne def { restartSensitivityIntensity = 3 } procs
+            withAsync sv $ \_ -> do
                 rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1,2,3]
                 rs2 <- for childQs callCountUp
@@ -605,8 +367,8 @@ spec = do
                     process             = newProcessSpec [monitor] restart $ putMVar marker () *> takeMVar trigger $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForOne def { restartSensitivityIntensity = 2 } procs) $ \_ -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForOne def { restartSensitivityIntensity = 2 } procs
+            withAsync sv $ \_ -> do
                 rs1 <- for markers takeMVar
                 rs1 `shouldBe` [(), ()]
                 for_ triggers $ \t -> putMVar t ()
@@ -625,8 +387,8 @@ spec = do
                     process             = newProcessSpec [monitor] restart $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForOne def { restartSensitivityIntensity = 2 } procs) $ \_ -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForOne def { restartSensitivityIntensity = 2 } procs
+            withAsync sv $ \_ -> do
                 rs1 <- for markers takeMVar
                 rs1 `shouldBe` [(), ()]
                 for_ triggers $ \t -> putMVar t ()
@@ -645,8 +407,8 @@ spec = do
                     process             = newProcessSpec [monitor] restart $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForOne def { restartSensitivityIntensity = 2 } procs) $ \_ -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForOne def { restartSensitivityIntensity = 2 } procs
+            withAsync sv $ \_ -> do
                 tids <- for markers takeMVar
                 for_ tids killThread
                 reports <- for childMons takeMVar
@@ -657,14 +419,14 @@ spec = do
 
         it "kills all children when it is killed" $ do
             rs <- for [1..10] $ \n -> do
-                childQ <- newMessageQueue
                 childMon <- newEmptyMVar
+                (childQ, child) <- newActor def $ simpleCountingServer n
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec [monitor] Permanent $ simpleCountingServer childQ n $> ()
+                    process             = newProcessSpec [monitor] Permanent $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForOne def procs) $ \_ -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForOne def procs
+            withAsync sv $ \_ -> do
                 rs <- for childQs callCountUp
                 rs `shouldBe` Just <$> [1..10]
             reports <- for childMons takeMVar
@@ -673,19 +435,19 @@ spec = do
         it "can be killed when children is finishing at the same time" $ do
             let volume = 2000
             rs <- for [1..volume] $ \n -> do
-                childQ <- newMessageQueue
-                childMon <- newMessageQueue
-                let monitor reason tid  = sendMessage childMon (reason, tid)
-                    process             = newProcessSpec [monitor] Permanent $ simpleCountingServer childQ n $> ()
+                childMon <- newTQueueIO
+                (childQ, child) <- newActor def $ simpleCountingServer n
+                let monitor reason tid  = atomically $ writeTQueue childMon (reason, tid)
+                    process             = newProcessSpec [monitor] Permanent $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForOne def { restartSensitivityIntensity = 1000 } procs) $ \_ -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForOne def { restartSensitivityIntensity = 1000 } procs
+            withAsync sv $ \_ -> do
                 rs <- for childQs callCountUp
                 rs `shouldBe` Just <$> [1..volume]
                 async $ for_ childQs $ \ch -> threadDelay 1 *> castFinish ch
                 threadDelay 10000
-            reports <- for childMons receive
+            reports <- for childMons $ atomically . readTQueue
             length reports `shouldBe` volume
             let normalCount = length . filter ((==) Normal . fst) $ reports
                 killedCount = length . filter ((==) Killed . fst) $ reports
@@ -695,14 +457,14 @@ spec = do
 
         it "intensive normal exit of permanent child causes termination of Supervisor itself" $ do
             rs <- for [1,2] $ \n -> do
-                childQ <- newMessageQueue
                 childMon <- newEmptyMVar
+                (childQ, child) <- newActor def $ simpleCountingServer n
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec [monitor] Permanent $ simpleCountingServer childQ n $> ()
+                    process             = newProcessSpec [monitor] Permanent $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForOne def procs) $ \a -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForOne def procs
+            withAsync sv $ \a -> do
                 rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1,2]
                 rs2 <- for childQs callCountUp
@@ -727,8 +489,8 @@ spec = do
                     process             = newProcessSpec [monitor] Permanent $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForOne def procs) $ \a -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForOne def procs
+            withAsync sv $ \a -> do
                 rs1 <- for markers takeMVar
                 rs1 `shouldBe` [(), ()]
                 putMVar (head triggers) ()
@@ -752,8 +514,8 @@ spec = do
                     process             = newProcessSpec [monitor] Permanent $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForOne def procs) $ \a -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForOne def procs
+            withAsync sv $ \a -> do
                 tids <- for markers takeMVar
                 killThread $ head tids
                 report1 <- takeMVar $ head childMons
@@ -770,14 +532,14 @@ spec = do
 
         it "intensive normal exit of transient child does not terminate Supervisor" $ do
             rs <- for [1..10] $ \n -> do
-                childQ <- newMessageQueue
                 childMon <- newEmptyMVar
+                (childQ, child) <- newActor def $ simpleCountingServer n
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec [monitor] Transient $ simpleCountingServer childQ n $> ()
+                    process             = newProcessSpec [monitor] Transient $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForOne def procs) $ \a -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForOne def procs
+            withAsync sv $ \a -> do
                 rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1..10]
                 rs2 <- for childQs callCountUp
@@ -798,8 +560,8 @@ spec = do
                     process             = newProcessSpec [monitor] Transient $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForOne def procs) $ \a -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForOne def procs
+            withAsync sv $ \a -> do
                 rs1 <- for markers takeMVar
                 rs1 `shouldBe` [(), ()]
                 putMVar (head triggers) ()
@@ -823,8 +585,8 @@ spec = do
                     process             = newProcessSpec [monitor] Transient $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForOne def procs) $ \a -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForOne def procs
+            withAsync sv $ \a -> do
                 tids <- for markers takeMVar
                 killThread $ head tids
                 report1 <- takeMVar $ head childMons
@@ -841,14 +603,14 @@ spec = do
 
         it "intensive normal exit of temporary child does not terminate Supervisor" $ do
             rs <- for [1..10] $ \n -> do
-                childQ <- newMessageQueue
                 childMon <- newEmptyMVar
+                (childQ, child) <- newActor def $ simpleCountingServer n
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec [monitor] Temporary $ simpleCountingServer childQ n $> ()
+                    process             = newProcessSpec [monitor] Temporary $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForOne def procs) $ \a -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForOne def procs
+            withAsync sv $ \a -> do
                 rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1..10]
                 rs2 <- for childQs callCountUp
@@ -869,8 +631,8 @@ spec = do
                     process             = newProcessSpec [monitor] Temporary $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForOne def procs) $ \a -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForOne def procs
+            withAsync sv $ \a -> do
                 rs1 <- for markers takeMVar
                 rs1 `shouldBe` replicate 10 ()
                 for_ triggers $ \t -> putMVar t ()
@@ -889,8 +651,8 @@ spec = do
                     process             = newProcessSpec [monitor] Temporary $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForOne def procs) $ \a -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForOne def procs
+            withAsync sv $ \a -> do
                 tids <- for markers takeMVar
                 for_ tids killThread
                 reports <- for childMons takeMVar
@@ -901,14 +663,14 @@ spec = do
 
         it "longer interval multiple normal exit of permanent child does not terminate Supervisor" $ do
             rs <- for [1..10] $ \n -> do
-                childQ <- newMessageQueue
                 childMon <- newEmptyMVar
+                (childQ, child) <- newActor def $ simpleCountingServer n
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec [monitor] Permanent $ simpleCountingServer childQ n $> ()
+                    process             = newProcessSpec [monitor] Permanent $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForOne def { restartSensitivityPeriod = TimeSpec 0 1000 } procs) $ \a -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForOne def { restartSensitivityPeriod = TimeSpec 0 1000 } procs
+            withAsync sv $ \a -> do
                 rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1..10]
                 rs2 <- for childQs callCountUp
@@ -929,8 +691,8 @@ spec = do
                     process             = newProcessSpec [monitor] Transient $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForOne def { restartSensitivityPeriod = TimeSpec 0 1000 } procs) $ \a -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForOne def { restartSensitivityPeriod = TimeSpec 0 1000 } procs
+            withAsync sv $ \a -> do
                 rs1 <- for markers takeMVar
                 rs1 `shouldBe` replicate 10 ()
                 for_ triggers $ \t -> threadDelay 1000 *> putMVar t ()
@@ -949,8 +711,8 @@ spec = do
                     process             = newProcessSpec [monitor] Transient $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForOne def { restartSensitivityPeriod = TimeSpec 0 1000 } procs) $ \a -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForOne def { restartSensitivityPeriod = TimeSpec 0 1000 } procs
+            withAsync sv $ \a -> do
                 tids <- for markers takeMVar
                 for_ tids $ \tid -> threadDelay 1000 *> killThread tid
                 reports <- for childMons takeMVar
@@ -962,14 +724,14 @@ spec = do
     describe "One-for-all Supervisor with static childlen" $ do
         it "automatically starts children based on given ProcessSpec list" $ do
             rs <- for [1,2,3] $ \n -> do
-                childQ <- newMessageQueue
                 childMon <- newEmptyMVar
+                (childQ, child) <- newActor def $ simpleCountingServer n
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec [monitor] Permanent $ simpleCountingServer childQ n $> ()
+                    process             = newProcessSpec [monitor] Permanent $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForAll def procs) $ \_ -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForAll def procs
+            withAsync sv $ \_ -> do
                 rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1,2,3]
                 rs2 <- for childQs callCountUp
@@ -977,14 +739,14 @@ spec = do
 
         it "automatically restarts all static children when one of permanent children finished" $ do
             rs <- for [1,2,3] $ \n -> do
-                childQ <- newMessageQueue
                 childMon <- newEmptyMVar
+                (childQ, child) <- newActor def $ simpleCountingServer n
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec [monitor] Permanent $ simpleCountingServer childQ n $> ()
+                    process             = newProcessSpec [monitor] Permanent $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForAll def procs) $ \_ -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForAll def procs
+            withAsync sv $ \_ -> do
                 rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1,2,3]
                 rs2 <- for childQs callCountUp
@@ -1006,8 +768,8 @@ spec = do
                     process             = newProcessSpec [monitor] restart $ putMVar marker () *> takeMVar trigger $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForAll def { restartSensitivityIntensity = 2 } procs) $ \_ -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForAll def { restartSensitivityIntensity = 2 } procs
+            withAsync sv $ \_ -> do
                 rs1 <- for markers takeMVar
                 rs1 `shouldBe` [(), ()]
                 putMVar (head triggers) ()
@@ -1032,8 +794,8 @@ spec = do
                     process             = newProcessSpec [monitor] restart $ (myThreadId >>= putMVar marker) *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForAll def { restartSensitivityIntensity = 2 } procs) $ \a -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForAll def { restartSensitivityIntensity = 2 } procs
+            withAsync sv $ \a -> do
                 rs1 <- for markers takeMVar
                 putMVar (head triggers) ()
                 reports <- for childMons takeMVar
@@ -1058,8 +820,8 @@ spec = do
                     process             = newProcessSpec [monitor] restart $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForAll def procs) $ \_ -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForAll def procs
+            withAsync sv $ \_ -> do
                 rs1 <- for markers takeMVar
                 rs1 `shouldBe` [(), ()]
                 putMVar (triggers !! 1) ()
@@ -1079,8 +841,8 @@ spec = do
                     process             = newProcessSpec [monitor] restart $ (myThreadId >>= putMVar marker) *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForAll def procs) $ \_ -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForAll def procs
+            withAsync sv $ \_ -> do
                 tids <- for markers takeMVar
                 killThread $ tids !! 1
                 (reason, _) <- takeMVar $ childMons !! 1
@@ -1091,14 +853,14 @@ spec = do
 
         it "kills all children when it is killed" $ do
             rs <- for [1..10] $ \n -> do
-                childQ <- newMessageQueue
                 childMon <- newEmptyMVar
+                (childQ, child) <- newActor def $ simpleCountingServer n
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec [monitor] Permanent $ simpleCountingServer childQ n $> ()
+                    process             = newProcessSpec [monitor] Permanent $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForAll def procs) $ \_ -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForAll def procs
+            withAsync sv $ \_ -> do
                 rs <- for childQs callCountUp
                 rs `shouldBe` Just <$> [1..10]
             reports <- for childMons takeMVar
@@ -1107,32 +869,32 @@ spec = do
         it "can be killed when children is finishing at the same time" $ do
             let volume = 1000
             rs <- for [1..volume] $ \n -> do
-                childQ <- newMessageQueue
-                childMon <- newMessageQueue
-                let monitor reason tid  = sendMessage childMon (reason, tid)
-                    process             = newProcessSpec [monitor] Permanent $ simpleCountingServer childQ n $> ()
+                childMon <- newTQueueIO
+                (childQ, child) <- newActor def $ simpleCountingServer n
+                let monitor reason tid  = atomically $ writeTQueue childMon (reason, tid)
+                    process             = newProcessSpec [monitor] Permanent $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForAll def procs) $ \_ -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForAll def procs
+            withAsync sv $ \_ -> do
                 rs <- for childQs callCountUp
                 rs `shouldBe` Just <$> [1..volume]
                 async $ threadDelay 1 *> castFinish (head childQs)
                 threadDelay 10000
-            reports <- for childMons receive
+            reports <- for childMons $ atomically . readTQueue
             (fst . head) reports `shouldBe` Normal
             tail reports `shouldSatisfy` all ((==) Killed . fst)
 
         it "intensive normal exit of permanent child causes termination of Supervisor itself" $ do
             rs <- for [1,2] $ \n -> do
-                childQ <- newMessageQueue
                 childMon <- newEmptyMVar
+                (childQ, child) <- newActor def $ simpleCountingServer n
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec [monitor] Permanent $ simpleCountingServer childQ n $> ()
+                    process             = newProcessSpec [monitor] Permanent $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForAll def procs) $ \a -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForAll def procs
+            withAsync sv $ \a -> do
                 rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1,2]
                 rs2 <- for childQs callCountUp
@@ -1157,8 +919,8 @@ spec = do
                     process             = newProcessSpec [monitor] Permanent $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForAll def procs) $ \a -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForAll def procs
+            withAsync sv $ \a -> do
                 rs1 <- for markers takeMVar
                 rs1 `shouldBe` [(), ()]
                 putMVar (head triggers) ()
@@ -1184,8 +946,8 @@ spec = do
                     process             = newProcessSpec [monitor] Permanent $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForAll def procs) $ \a -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForAll def procs
+            withAsync sv $ \a -> do
                 tids <- for markers takeMVar
                 killThread $ head tids
                 reports1 <- for childMons takeMVar
@@ -1202,14 +964,14 @@ spec = do
 
         it "intensive normal exit of transient child does not terminate Supervisor" $ do
             rs <- for [1..10] $ \n -> do
-                childQ <- newMessageQueue
                 childMon <- newEmptyMVar
+                (childQ, child) <- newActor def $ simpleCountingServer n
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec [monitor] Transient $ simpleCountingServer childQ n $> ()
+                    process             = newProcessSpec [monitor] Transient $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForAll def procs) $ \a -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForAll def procs
+            withAsync sv $ \a -> do
                 rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1..10]
                 rs2 <- for childQs callCountUp
@@ -1230,8 +992,8 @@ spec = do
                     process             = newProcessSpec [monitor] Transient $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForAll def procs) $ \a -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForAll def procs
+            withAsync sv $ \a -> do
                 rs1 <- for markers takeMVar
                 rs1 `shouldBe` [(), ()]
                 putMVar (head triggers) ()
@@ -1257,8 +1019,8 @@ spec = do
                     process             = newProcessSpec [monitor] Transient $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForAll def procs) $ \a -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForAll def procs
+            withAsync sv $ \a -> do
                 tids1 <- for markers takeMVar
                 killThread $ head tids1
                 reports1 <- for childMons takeMVar
@@ -1275,14 +1037,14 @@ spec = do
 
         it "intensive normal exit of temporary child does not terminate Supervisor" $ do
             rs <- for [1..10] $ \n -> do
-                childQ <- newMessageQueue
                 childMon <- newEmptyMVar
+                (childQ, child) <- newActor def $ simpleCountingServer n
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec [monitor] Temporary $ simpleCountingServer childQ n $> ()
+                    process             = newProcessSpec [monitor] Temporary $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForAll def procs) $ \a -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForAll def procs
+            withAsync sv $ \a -> do
                 rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1..10]
                 rs2 <- for childQs callCountUp
@@ -1303,8 +1065,8 @@ spec = do
                     process             = newProcessSpec [monitor] Temporary $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
-            sv <- newMessageQueue
-            withAsync(newSupervisor sv OneForAll def procs) $ \a -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForAll def procs
+            withAsync sv $ \a -> do
                 rs1 <- for markers takeMVar
                 rs1 `shouldBe` replicate 10 ()
                 for_ triggers $ \t -> putMVar t ()
@@ -1323,8 +1085,8 @@ spec = do
                     process             = newProcessSpec [monitor] Temporary $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForAll def procs) $ \a -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForAll def procs
+            withAsync sv $ \a -> do
                 tids <- for markers takeMVar
                 for_ tids killThread
                 reports <- for childMons takeMVar
@@ -1335,12 +1097,12 @@ spec = do
 
         it "longer interval multiple normal exit of permanent child does not terminate Supervisor" $ do
             rs <- for [1..10] $ \n -> do
-                childQ <- newMessageQueue
-                let process             = newProcessSpec [] Permanent $ simpleCountingServer childQ n $> ()
+                (childQ, child) <- newActor def $ simpleCountingServer n
+                let process             = newProcessSpec [] Permanent $ child $> ()
                 pure (childQ, process)
             let (childQs, procs) = unzip rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForAll def { restartSensitivityPeriod = TimeSpec 0 1000 } procs) $ \a -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForAll def { restartSensitivityPeriod = TimeSpec 0 1000 } procs
+            withAsync sv $ \a -> do
                 rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1..10]
                 rs2 <- for childQs callCountUp
@@ -1359,8 +1121,8 @@ spec = do
                 let process             = newProcessSpec [] Transient $ atomically (writeTVar marker True) *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, process)
             let (markers, triggers, procs) = unzip3 rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForAll def { restartSensitivityPeriod = TimeSpec 0 1000 } procs) $ \a -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForAll def { restartSensitivityPeriod = TimeSpec 0 1000 } procs
+            withAsync sv $ \a -> do
                 threadDelay 1000
                 rs1 <- for markers readTVarIO
                 rs1 `shouldBe` replicate 10 True
@@ -1380,8 +1142,8 @@ spec = do
                 let process             = newProcessSpec [] Transient $ (myThreadId >>= atomically . writeTVar marker) *> takeMVar blocker $> ()
                 pure (marker, process)
             let (markers, procs) = unzip rs
-            sv <- newMessageQueue
-            withAsync (newSupervisor sv OneForAll def procs) $ \a -> do
+            (svQ, sv) <- newActor def $ newSupervisor OneForAll def procs
+            withAsync sv $ \a -> do
                 threadDelay 10000
                 tids <- for markers readTVarIO
                 tids `shouldSatisfy` notElem myTid
