@@ -38,6 +38,7 @@ module Control.Concurrent.Supervisor
     , tryReceiveSelect
     -- * Actor
     , newActor
+    , newBoundedActor
     -- * Supervisable IO action
     , Restart (..)
     , ExitReason (..)

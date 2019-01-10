@@ -199,13 +199,20 @@ type ActorHandler a b = (MessageQueue a -> IO b)
     Create a new actor.
 -}
 newActor
+    :: ActorHandler a b
+    -> IO (MessageQueueTail a, IO b)
+newActor = newBoundedActor def
+
+{-|
+    Create a new actor with bounded inbox queue.
+-}
+newBoundedActor
     :: MessageQueueLength
     -> ActorHandler a b
     -> IO (MessageQueueTail a, IO b)
-newActor maxQLen handler = do
+newBoundedActor maxQLen handler = do
     q <- newMessageQueue maxQLen
     pure (MessageQueueTail q, handler q)
-
 
 {-
     State machine behavior.
