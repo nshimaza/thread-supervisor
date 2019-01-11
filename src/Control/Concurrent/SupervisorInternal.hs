@@ -239,7 +239,7 @@ newStateMachine
     -> ActorHandler message result
 newStateMachine initialState messageHandler inbox = go $ Right initialState
   where
-    go (Right state) = go =<< mask_ (messageHandler state =<< receive inbox)
+    go (Right state) = receive inbox >>= messageHandler state >>= go
     go (Left result) = pure result
 
 
