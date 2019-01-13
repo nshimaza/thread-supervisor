@@ -15,18 +15,22 @@ module Control.Concurrent.Supervisor
     (
       -- * Message queue
       --
-      -- | 'MessageQueue' is specifically designed queue for implementing all behaviors available in this package.  It provides
-      -- following capabilities.
+      -- | 'MessageQueue' is specifically designed queue for implementing actor which is all behaviors available in this
+      -- package depend on.  It provides following capabilities.
       --
-      -- * Thread-safe push (write/send) end.
-      -- * Blocking pull (read/receive) operation.
-      -- * Selective pull (read) operation with blocking and non-blocking options.
+      -- * Thread-safe write (push/send) end.
+      -- * Blocking read (pull/receive) operation.
+      -- * Selective read (pull/receive) operation with blocking and non-blocking options.
       -- * Current queue length.
       -- * Bounded queue.
       --
-      -- Note that it is not a generic thread-safe queue.  Only write-end is thread-safe but read-end is /NOT/ thread-safe.
-      -- 'MessageQueue' assumes only one thread reads from a queue.  However, there is no way to prevent multiple threads
-      -- read from single queue.  It is user's responsibility to ensure only one thread reads from a queue.
+      -- Note that it is not a generic thread-safe queue.  Only write-end is thread-safe but read-end is /NOT/
+      -- thread-safe.  'MessageQueue' assumes only one thread reads from a queue.  In order to protect read-end of
+      -- 'MessageQueue', no 'MessageQueue' constructor is exposed but instead you can get it only via 'newActor' or
+      -- 'newBoundedActor'.
+      --
+      -- From outside of actor, only write-end is exposed via 'MessageQueueTail'.  From inside of actor, read-end is
+      -- available via 'MessageQueue' and write-end is available too via wrapping 'MessageQueue' by 'MessageQueueTail'.
       MessageQueue
     , MessageQueueTail
     , sendMessage
@@ -37,6 +41,25 @@ module Control.Concurrent.Supervisor
     , receiveSelect
     , tryReceiveSelect
     -- * Actor
+    --
+    -- | Actor is IO action emulating Erlang's actor.  It has a dedicated 'MessageQueue' and processes incoming messages
+    -- until reaching end state.  'newActor' and 'newBoundedActor' create an actor with new 'MessageQueue'.  It is the
+    -- only exposed way to create a new 'MessageQueue'.  This limitation is intended to make it harder to access to
+    -- read-end of 'MessageQueue' from other than inside of actor's message handler.
+    --
+    -- From perspective of outside of actor, user supplies an IO action with type 'ActorHandler' to 'newActor' or
+    -- 'newBoundedActor' then get actor and write-end of message queue of the actor.
+    --
+    -- From perspective of inside of actor, in other word, from perspective of user supplied message handler, it has
+    -- a message queue both side available.
+    --
+    -- __Important__
+    --
+    -- Current actor implementation does /NOT/ allow shared inbox.  /NEVER/ run actor (IO action returned by 'newActor'
+    -- or 'newBoundedActor') in multiple thread at a time.  If you need to run your IO action concurrently, you have to
+    -- create multiple actor instances from the same IO action in order to ensure each actor has dedicated
+    -- 'MessageQueue' instance.
+    , ActorHandler
     , newActor
     , newBoundedActor
     -- * Supervisable IO action

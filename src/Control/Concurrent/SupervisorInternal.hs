@@ -68,7 +68,7 @@ newMessageQueue (MessageQueueLength upperBound) = MessageQueue <$> newTQueueIO <
 -- newBoundedMessageQueue :: Word -> IO (MessageQueue a)
 -- newBoundedMessageQueue upperBound = MessageQueue <$> newTQueueIO <*> newTVarIO 0 <*> newIORef [] <*> pure upperBound
 
--- | Send a message to given 'MessageQueue'.  Block if the 'MessageQueue' is full.
+-- | Send a message to given 'MessageQueueTail'.  Block while the queue is full.
 sendMessage :: MessageQueueTail a -> a -> IO ()
 sendMessage (MessageQueueTail (MessageQueue inbox lenTVar _ limit)) msg = atomically $ do
     len <- readTVar lenTVar
@@ -76,7 +76,7 @@ sendMessage (MessageQueueTail (MessageQueue inbox lenTVar _ limit)) msg = atomic
     then modifyTVar' lenTVar succ *> writeTQueue inbox msg
     else retrySTM
 
--- | Try to send a message to given 'MessageQueue'.  Return Nothing if the 'MessageQueue' is full.
+-- | Try to send a message to given 'MessageQueueTail'.  Return Nothing if the queue is already full.
 trySendMessage :: MessageQueueTail a -> a -> IO (Maybe ())
 trySendMessage (MessageQueueTail (MessageQueue inbox lenTVar _ limit)) msg = atomically $ do
     len <- readTVar lenTVar
@@ -84,7 +84,7 @@ trySendMessage (MessageQueueTail (MessageQueue inbox lenTVar _ limit)) msg = ato
     then modifyTVar' lenTVar succ *> writeTQueue inbox msg $> Just ()
     else pure Nothing
 
--- | Number of elements currently held by the 'MessageQueue'.
+-- | Number of elements currently held by the 'MessageQueueTail'.
 length:: MessageQueueTail a -> IO Word
 length (MessageQueueTail q) = readTVarIO $ messageQueueLength q
 
@@ -192,11 +192,22 @@ receive = receiveSelect (const True)
 tryReceive :: MessageQueue a -> IO (Maybe a)
 tryReceive = tryReceiveSelect (const True)
 
-
+-- | Type synomim of user supplied message handler inside actor.
 type ActorHandler a b = (MessageQueue a -> IO b)
 
 {-|
     Create a new actor.
+
+    User have to supply a message handler function with 'ActorHandler' type.  It accepts a 'MessageQueue' and returns
+    anything.
+
+    'newActor' creates a new 'MessageQueue', apply user supplied message handler to the queue, returns reference to
+    write-end of the queue and IO action of the actor.  Because 'newActor' only returns 'MessageQueueTail' caller of
+    'newActor' can only send messages to created actor.
+
+    'MessageQueue' itself is passed to user supplied message handler so the handler can receive message to the actor.
+    If the handler need to send a message to itself, wrap the message queue by 'MessageQueueTail' constructor then
+    use 'sendMessage' over created 'MessageQueueTail'.
 -}
 newActor
     :: ActorHandler a b
@@ -463,8 +474,9 @@ data SupervisorMessage
     = Down ExitReason ThreadId                              -- ^ Notification of child thread termination.
     | StartChild ProcessSpec (ServerCallback (Async ()))    -- ^ Command to start a new supervised thread.
 
--- | Type synonym for inbox message queue of supervisor.
+-- | Type synonym for write-end of supervisor's message queue.
 type SupervisorQueue = MessageQueueTail SupervisorMessage
+-- | Type synonym for read-end of supervisor's message queue.
 type SupervisorInbox = MessageQueue SupervisorMessage
 
 -- | Start a new thread with supervision.
