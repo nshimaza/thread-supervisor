@@ -80,6 +80,16 @@ spec = do
             r2 <- action
             r2 `shouldBe` n
 
+        prop "can send a message to itself" $ \n -> do
+            mark <- newEmptyMVar
+            (qtail, action) <- newActor $ \inbox -> do
+                msg <- receive inbox
+                sendMessage (MessageQueueTail inbox) (msg + 1)
+                receive inbox
+            sendMessage qtail (n :: Int)
+            r2 <- action
+            r2 `shouldBe` (n + 1)
+
     describe "State machine behavior" $ do
         it "returns result when event handler returns Left" $ do
             (qtail, statem) <- newActor $ newStateMachine () $ \_ _ -> pure $ Left "Hello"

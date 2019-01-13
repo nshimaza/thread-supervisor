@@ -32,7 +32,7 @@ module Control.Concurrent.Supervisor
       -- From outside of actor, only write-end is exposed via 'MessageQueueTail'.  From inside of actor, read-end is
       -- available via 'MessageQueue' and write-end is available too via wrapping 'MessageQueue' by 'MessageQueueTail'.
       MessageQueue
-    , MessageQueueTail
+    , MessageQueueTail (..)
     , sendMessage
     , trySendMessage
     , length
