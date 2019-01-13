@@ -20,7 +20,7 @@ import           Data.Functor        (($>))
 import           Data.Map.Strict     (Map, delete, elems, empty, insert, lookup)
 import           System.Clock        (Clock (Monotonic), TimeSpec (..),
                                       diffTimeSpec, getTime)
-import           UnliftIO            (Async, IORef, SomeException, TMVar,
+import           UnliftIO            (Async, IORef, STM, SomeException, TMVar,
                                       TQueue, TVar, async, asyncThreadId,
                                       asyncWithUnmask, atomically, bracket,
                                       cancel, catch, finally, mask_,
@@ -45,7 +45,7 @@ import           Data.DelayedQueue   (DelayedQueue, newEmptyDelayedQueue, pop,
 data MessageQueue a = MessageQueue
     { messageQueueInbox     :: TQueue a     -- ^ Concurrent queue receiving message from other threads.
     , messageQueueLength    :: TVar Word    -- ^ Number of elements currently held by the 'MessageQueue'.
-    , messageQueueSaveStack :: IORef [a]    -- ^ Saved massage by 'receiveSelect'.  It keeps messages
+    , messageQueueSaveStack :: TVar [a]    -- ^ Saved massage by 'receiveSelect'.  It keeps messages
                                             --   not selected by receiveSelect in reversed order.
                                             --   Latest message is kept at head of the list.
     , messageQueueMaxBound  :: Word         -- ^ Maximum length of the 'MessageQueue'
@@ -62,7 +62,7 @@ newtype MessageQueueTail a = MessageQueueTail (MessageQueue a)
 
 -- | Create a new empty 'MessageQueue'.
 newMessageQueue :: MessageQueueLength -> IO (MessageQueue a)
-newMessageQueue (MessageQueueLength upperBound) = MessageQueue <$> newTQueueIO <*> newTVarIO 0 <*> newIORef [] <*> pure upperBound
+newMessageQueue (MessageQueueLength upperBound) = MessageQueue <$> newTQueueIO <*> newTVarIO 0 <*> newTVarIO [] <*> pure upperBound
 
 -- -- | Create a new empty 'MessageQueue' with upper bound of length.
 -- newBoundedMessageQueue :: Word -> IO (MessageQueue a)
@@ -117,14 +117,14 @@ receiveSelect
     :: (a -> Bool)      -- ^ Predicate to pick a interesting message.
     -> MessageQueue a   -- ^ Message queue where interesting message searched for.
     -> IO a
-receiveSelect predicate (MessageQueue inbox lenTVar saveStack _) = do
-    saved <- readIORef saveStack
+receiveSelect predicate (MessageQueue inbox lenTVar saveStack _) = atomically $ do
+    saved <- readTVar saveStack
     case pickFromSaveStack predicate saved of
         (Just (msg, newSaved)) -> oneMessageRemoved lenTVar saveStack newSaved $> msg
         Nothing                -> go saved
   where
     go newSaved = do
-        msg <- atomically $ readTQueue inbox
+        msg <- readTQueue inbox
         if predicate msg
         then oneMessageRemoved lenTVar saveStack newSaved $> msg
         else go (msg:newSaved)
@@ -150,16 +150,16 @@ tryReceiveSelect
     :: (a -> Bool)      -- ^ Predicate to pick a interesting message.
     -> MessageQueue a   -- ^ Message queue where interesting message searched for.
     -> IO (Maybe a)
-tryReceiveSelect predicate (MessageQueue inbox lenTVar saveStack _) = do
-    saved <- readIORef saveStack
+tryReceiveSelect predicate (MessageQueue inbox lenTVar saveStack _) = atomically $ do
+    saved <- readTVar saveStack
     case pickFromSaveStack predicate saved of
         (Just (msg, newSaved)) -> oneMessageRemoved lenTVar saveStack newSaved $> Just msg
         Nothing                -> go saved
   where
     go newSaved = do
-        maybeMsg <- atomically $ tryReadTQueue inbox
+        maybeMsg <- tryReadTQueue inbox
         case maybeMsg of
-            Nothing                     -> writeIORef saveStack newSaved $> Nothing
+            Nothing                     -> writeTVar saveStack newSaved $> Nothing
             Just msg | predicate msg    -> oneMessageRemoved lenTVar saveStack newSaved $> Just msg
                      | otherwise        -> go (msg:newSaved)
 
@@ -177,12 +177,12 @@ pickFromSaveStack predicate saveStack = go [] $ reverse saveStack
 -- | Mutate 'MessageQueue' when a message was removed from it.
 oneMessageRemoved
     :: TVar Word    -- ^ 'TVar' holding current number of messages in the queue.
-    -> IORef [a]    -- ^ 'IORef' to saveStack to be overwritten.
+    -> TVar [a]    -- ^ 'IORef' to saveStack to be overwritten.
     -> [a]          -- ^ New saveStack to mutate given IORef
-    -> IO ()
+    -> STM ()
 oneMessageRemoved len saveStack newSaved = do
-    atomically $ modifyTVar' len pred
-    writeIORef saveStack newSaved
+    modifyTVar' len pred
+    writeTVar saveStack newSaved
 
 -- | Receive first message in 'MessageQueue'.  Block until message available.
 receive :: MessageQueue a -> IO a

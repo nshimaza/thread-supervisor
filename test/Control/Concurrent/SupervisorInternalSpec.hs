@@ -61,7 +61,7 @@ spec = do
                 r2 <- wait a
                 r2 `shouldBe` "Hello"
 
-        modifyMaxSuccess (const 10) $ modifyMaxSize (const 100000)  $ prop "queues massive number of messages concurrently" $ \xs -> do
+        modifyMaxSuccess (const 10) $ modifyMaxSize (const 100000)  $ prop "concurrent read and write to the same queue" $ \xs -> do
             q <- newMessageQueue def
             let qtail = MessageQueueTail q
             withAsync (for_ xs (sendMessage qtail . Just) *> sendMessage qtail Nothing) $ \_ -> do
