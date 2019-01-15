@@ -4,13 +4,14 @@ import           Data.Char                             (chr, ord)
 import           Data.Default                          (def)
 import           Data.Foldable                         (for_)
 import           Data.Functor                          (($>))
+import           Data.List                             (sort)
 import           Data.Maybe                            (fromJust, isJust,
                                                         isNothing)
 import           Data.Traversable                      (for)
 import           System.Clock                          (TimeSpec (..),
                                                         fromNanoSecs)
 import           UnliftIO                              (StringException (..),
-                                                        asyncThreadId,
+                                                        async, asyncThreadId,
                                                         atomically, cancel,
                                                         fromException,
                                                         newEmptyMVar,
@@ -41,6 +42,8 @@ instance Eq ExitReason where
 reasonToString :: ExitReason -> String
 reasonToString  (UncaughtException e) = toStr $ fromException e
   where toStr (Just (StringException str _)) = str
+
+data IntFin = Fin | IntVal Int
 
 spec :: Spec
 spec = do
@@ -299,6 +302,28 @@ spec = do
             receive q
             r2 <- trySendMessage qtail 1
             r2 `shouldBe` Just ()
+
+    describe "Concurrent operation MessageQueue" $ do
+        prop "receives messages from concurrent senders" $ \xs -> do
+            q <- newMessageQueue def
+            for_ (xs :: [Int]) $ \x -> async $ sendMessage (MessageQueueTail q) x
+            ys <- for xs $ \_ -> receive q
+            sort ys `shouldBe` sort xs
+
+        prop "can be shared by concurrent receivers" $ \xs -> do
+            q <- newMessageQueue def
+            let qtail = MessageQueueTail q
+            for_ (xs :: [Int]) $ \x -> sendMessage qtail $ IntVal x
+            for_ xs $ \x -> sendMessage qtail Fin
+            sendMessage qtail Fin
+            let receiver queue msgs = do
+                    msg <- receive queue
+                    case msg of
+                        (IntVal n)  -> receiver queue (n:msgs)
+                        Fin         -> pure msgs
+            as <- for xs $ \_ -> async $ receiver q []
+            rs <- for as wait
+            (sort . concat) rs `shouldBe` sort xs
 
     describe "Process" $ do
         it "reports exit code Normal on normal exit" $ do

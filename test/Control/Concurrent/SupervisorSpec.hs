@@ -404,7 +404,7 @@ spec = do
                 for_ triggers $ \t -> putMVar t ()
                 reports <- for childMons takeMVar
                 reports `shouldSatisfy` all ((==) "oops" . reasonToString . fst)
-                threadDelay 1000
+                threadDelay 10000
                 rs <- for markers $  \m -> isEmptyMVar m
                 rs `shouldBe` [False, True]
 
@@ -423,8 +423,8 @@ spec = do
                 for_ tids killThread
                 reports <- for childMons takeMVar
                 reports `shouldSatisfy` all ((==) Killed . fst)
-                threadDelay 1000
-                rs <- for markers $  \m -> isEmptyMVar m
+                threadDelay 10000
+                rs <- for markers $ \m -> isEmptyMVar m
                 rs `shouldBe` [False, True]
 
         it "kills all children when it is killed" $ do
