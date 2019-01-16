@@ -316,12 +316,32 @@ spec = do
             for_ (xs :: [Int]) $ \x -> sendMessage qtail $ IntVal x
             for_ xs $ \x -> sendMessage qtail Fin
             sendMessage qtail Fin
-            let receiver queue msgs = do
-                    msg <- receive queue
+            let receiver msgs = do
+                    msg <- receive q
                     case msg of
-                        (IntVal n)  -> receiver queue (n:msgs)
+                        (IntVal n)  -> receiver (n:msgs)
                         Fin         -> pure msgs
-            as <- for xs $ \_ -> async $ receiver q []
+            as <- for xs $ \_ -> async $ receiver []
+            rs <- for as wait
+            (sort . concat) rs `shouldBe` sort xs
+
+        prop "can be shared by concurrent senders and receivers" $ \xs -> do
+            q <- newMessageQueue def
+            let qtail = MessageQueueTail q
+            let sender msg = do
+                    mark <- newEmptyMVar
+                    sendMessage qtail $ IntVal msg
+                    pure ()
+                receiver msgs = do
+                    msg <- receive q
+                    case msg of
+                        (IntVal n)  -> receiver (n:msgs)
+                        Fin         -> pure msgs
+            marks <- for (xs :: [Int]) $ \x -> async $ sender x
+            as <- for xs $ \_ -> async $ receiver []
+            for_ marks wait
+            for_ xs $ \x -> sendMessage qtail Fin
+            sendMessage qtail Fin
             rs <- for as wait
             (sort . concat) rs `shouldBe` sort xs
 
