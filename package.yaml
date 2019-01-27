@@ -21,15 +21,14 @@ description:         Please see the README on Github at <https://github.com/nshi
 
 dependencies:
 - base >= 4.7 && < 5
+- clock
+- data-default
+- unliftio
 
 library:
   source-dirs: src
   dependencies:
-  - async
-  - clock
   - containers
-  - data-default
-  - unliftio
 
 executables:
   async-supervisor-exe:
@@ -51,10 +50,6 @@ tests:
     - -rtsopts
     - -with-rtsopts=-N
     dependencies:
-    - async
-    - clock
-    - data-default
-    - unliftio
     - hspec
     - QuickCheck
     - async-supervisor

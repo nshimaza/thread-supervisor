@@ -11,12 +11,11 @@ import           System.Clock                  (Clock (Monotonic),
                                                 TimeSpec (..), getTime,
                                                 toNanoSecs)
 import           UnliftIO                      (StringException (..), async,
-                                                asyncThreadId,
-                                                atomically, cancel,
-                                                fromException, isEmptyMVar,
-                                                newEmptyMVar, newTQueueIO,
-                                                newTVarIO, poll, putMVar,
-                                                readMVar, readTQueue,
+                                                asyncThreadId, atomically,
+                                                cancel, fromException,
+                                                isEmptyMVar, newEmptyMVar,
+                                                newTQueueIO, newTVarIO, poll,
+                                                putMVar, readMVar, readTQueue,
                                                 readTVarIO, takeMVar,
                                                 throwString, wait, withAsync,
                                                 writeTQueue, writeTVar)
@@ -155,7 +154,7 @@ spec = do
 
         it "keeps its own state and call can change the state" $ do
             (srvQ, srv) <- newActor $ simpleCountingServer 0
-            withAsync (srv) $ \_ -> do
+            withAsync srv $ \_ -> do
                 r1 <- callCountUp srvQ
                 r1 `shouldBe` Just 0
                 r2 <- callCountUp srvQ
@@ -223,7 +222,7 @@ spec = do
         it "kills all children when it is killed" $ do
             rs <- for [1..10] $ \n -> do
                 childMon <- newEmptyMVar
-                (childQ, child) <- (newActor $ simpleCountingServer n)
+                (childQ, child) <- newActor $ simpleCountingServer n
                 let monitor reason tid  = putMVar childMon (reason, tid)
                     process             = newProcessSpec [monitor] Temporary $ child $> ()
                 pure (childQ, childMon, process)
@@ -239,9 +238,8 @@ spec = do
         it "can be killed when children is finishing at the same time" $ do
             let volume = 1000
             rs <- for [1..volume] $ \n -> do
-                -- childQ <- newMessageQueue
                 childMon <- newEmptyMVar
-                (childQ, child) <- (newActor $ simpleCountingServer n)
+                (childQ, child) <- newActor $ simpleCountingServer n
                 let monitor reason tid  = putMVar childMon (reason, tid)
                     process             = newProcessSpec [monitor] Temporary $ child $> ()
                 pure (childQ, childMon, process)

@@ -319,8 +319,8 @@ spec = do
             let receiver msgs = do
                     msg <- receive q
                     case msg of
-                        (IntVal n)  -> receiver (n:msgs)
-                        Fin         -> pure msgs
+                        (IntVal n) -> receiver (n:msgs)
+                        Fin        -> pure msgs
             as <- for xs $ \_ -> async $ receiver []
             rs <- for as wait
             (sort . concat) rs `shouldBe` sort xs
@@ -335,8 +335,8 @@ spec = do
                 receiver msgs = do
                     msg <- receive q
                     case msg of
-                        (IntVal n)  -> receiver (n:msgs)
-                        Fin         -> pure msgs
+                        (IntVal n) -> receiver (n:msgs)
+                        Fin        -> pure msgs
             marks <- for (xs :: [Int]) $ \x -> async $ sender x
             as <- for xs $ \_ -> async $ receiver []
             for_ marks wait
