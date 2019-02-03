@@ -18,16 +18,15 @@ module Control.Concurrent.Supervisor
       -- | 'MessageQueue' is specifically designed queue for implementing actor which is all behaviors available in this
       -- package depend on.  It provides following capabilities.
       --
-      -- * Thread-safe write (push/send) end.
-      -- * Blocking read (pull/receive) operation.
-      -- * Selective read (pull/receive) operation with blocking and non-blocking options.
+      -- * Thread-safe read (pull/receive) and write (push/send) end.
+      -- * Blocking and non-blocking read (pull/receive) operation.
+      -- * Selective read (pull/receive) operation.
       -- * Current queue length.
       -- * Bounded queue.
       --
-      -- Note that it is not a generic thread-safe queue.  Only write-end is thread-safe but read-end is /NOT/
-      -- thread-safe.  'MessageQueue' assumes only one thread reads from a queue.  In order to protect read-end of
-      -- 'MessageQueue', no 'MessageQueue' constructor is exposed but instead you can get it only via 'newActor' or
-      -- 'newBoundedActor'.
+      -- Note that 'MessageQueue' is intended to be used for inbox of actor.  In order to avoid different actors
+      -- accidentally reading from same 'MessageQueue', no 'MessageQueue' constructor is exposed but instead you can get
+      -- it only via 'newActor' or 'newBoundedActor'.
       --
       -- From outside of actor, only write-end is exposed via 'MessageQueueTail'.  From inside of actor, read-end is
       -- available via 'MessageQueue' and write-end is available too via wrapping 'MessageQueue' by 'MessageQueueTail'.
@@ -53,12 +52,11 @@ module Control.Concurrent.Supervisor
     -- From perspective of inside of actor, in other word, from perspective of user supplied message handler, it has
     -- a message queue both side available.
     --
-    -- __Important__
+    -- __Shared Inbox__
     --
-    -- Current actor implementation does /NOT/ allow shared inbox.  /NEVER/ run actor (IO action returned by 'newActor'
-    -- or 'newBoundedActor') in multiple thread at a time.  If you need to run your IO action concurrently, you have to
-    -- create multiple actor instances from the same IO action in order to ensure each actor has dedicated
-    -- 'MessageQueue' instance.
+    -- You can run created actor multiple time simultaneously with different thread each.  In such case, each actor
+    -- instances share single 'MessageQueue'.  This would be useful to distribute task stream to multiple worker
+    -- actors, however, keep in mind there is no way to control which message is routed to what actor.
     , ActorHandler
     , newActor
     , newBoundedActor
