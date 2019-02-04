@@ -24,7 +24,7 @@ Here one thing you need to be aware.  Garbage collection doesn't work on living
 thread.  When you lost reference to an object, garbage collector frees up the
 object for you.  However, even though you lost the thread ID of your child
 thread, Haskell runtime doesn't consider the thread is orphaned.  The child
-thread continue running.
+thread continues running.
 
 This is prone to create thread leakage.  You can accidentally lose thread ID of
 child thread by crash of parent thread.  Now you no longer have way to kill
@@ -36,7 +36,7 @@ painful.
 
 This package is intended to provide better wrapper API over plain forkIO.  Not
 just providing parent-child thread lifecycle management, this package provides
-Erlang/TOP like API so that user can leverage well proven practices from
+Erlang/OTP like API so that user can leverage well proven practices from
 Erlang/OTP.
 
 If you need to keep your child running after parent terminated, this API is not
