@@ -382,13 +382,12 @@ installNestedMonitor monitor monitoredAction unmask = do
     restart it based on restart type.  Additionally, user can also receive notification
     on its termination by supplying user\'s own callback functions.
 -}
-data ProcessSpec = ProcessSpec [Monitor] Restart (IO ())
+data ProcessSpec = ProcessSpec Restart MonitoredAction
 
 -- | Create a 'ProcessSpec'.
 newProcessSpec
-    :: [Monitor]    -- ^ List of callback functions.  They are called when the IO action was terminated.
-    -> Restart      -- ^ Restart type of resulting 'ProcessSpec'.  One of 'Permanent', 'Transient' or 'Temporary'.
-    -> IO ()        -- ^ User supplied IO action which the 'ProcessSpec' actually does.
+    :: Restart          -- ^ Restart type of resulting 'ProcessSpec'.  One of 'Permanent', 'Transient' or 'Temporary'.
+    -> MonitoredAction  -- ^ User supplied IO action which the 'ProcessSpec' actually does.
     -> ProcessSpec
 newProcessSpec = ProcessSpec
 
@@ -397,7 +396,7 @@ addMonitor
     :: Monitor      -- ^ Callback function called when the IO action of the 'ProcessSpec' terminated.
     -> ProcessSpec  -- ^ Existing 'ProcessSpec' where the 'Monitor' is going to be added.
     -> ProcessSpec  -- ^ Newly created 'ProcessSpec' with the 'Monitor' added.
-addMonitor monitor (ProcessSpec monitors restart action) = ProcessSpec (monitor:monitors) restart action
+addMonitor monitor (ProcessSpec restart monitoredAction) = ProcessSpec restart $ installNestedMonitor monitor monitoredAction
 
 {-|
     'ProcessMap' is mutable variable which holds pool of living threads and 'ProcessSpec' of each thread.
@@ -417,15 +416,10 @@ newProcess
     :: ProcessMap       -- ^ Map of current live processes where the new process is going to be added.
     -> ProcessSpec      -- ^ Specification of newly started process.
     -> IO (Async ())    -- ^ 'Async' representing forked thread.
-newProcess procMap procSpec@(ProcessSpec monitors _ action) = mask_ $ do
-    reason <- newIORef Killed
-    a <- asyncWithUnmask $ \unmask ->
-        ((unmask action *> writeIORef reason Normal) `catch` (writeIORef reason . UncaughtException))
-        `finally` (readIORef reason >>= notify monitors)
+newProcess procMap procSpec@(ProcessSpec _ monitoredAction) = mask_ $ do
+    a <- asyncWithUnmask monitoredAction
     modifyIORef' procMap $ insert (asyncThreadId a) (a, procSpec)
     pure a
-  where
-    notify monitors reason = uninterruptibleMask_ $ for_ monitors (\monitor -> myThreadId >>= monitor reason)
 
 {-
     Restart intensity handling.
@@ -600,7 +594,7 @@ newSupervisor strategy restartSensitivity procSpecs inbox = bracket newProcessMa
             processRestart $ snd <$> lookup tid pmap
           where
             processRestart :: Maybe ProcessSpec -> IO (Either () IntenseRestartDetector)
-            processRestart (Just procSpec@(ProcessSpec _ restart _)) = do
+            processRestart (Just procSpec@(ProcessSpec restart _)) = do
                 modifyIORef' procMap $ delete tid
                 if restartNeeded restart reason
                 then do
@@ -616,8 +610,8 @@ newSupervisor strategy restartSensitivity procSpecs inbox = bracket newProcessMa
             restartNeeded Transient Normal = False
             restartNeeded _         _      = True
 
-        handler hist (StartChild (ProcessSpec monitors _ proc) cont) =
-            (newSupervisedProcess (MessageQueueTail inbox) procMap (ProcessSpec monitors Temporary proc) >>= cont) $> Right hist
+        handler hist (StartChild (ProcessSpec _ proc) cont) =
+            (newSupervisedProcess (MessageQueueTail inbox) procMap (ProcessSpec Temporary proc) >>= cont) $> Right hist
 
         restartChild OneForOne procMap spec = void $ newSupervisedProcess (MessageQueueTail inbox) procMap spec
         restartChild OneForAll procMap _    = do
