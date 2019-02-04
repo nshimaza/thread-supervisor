@@ -13,11 +13,13 @@ import           System.Clock                  (Clock (Monotonic),
 import           UnliftIO                      (StringException (..), async,
                                                 asyncThreadId, atomically,
                                                 cancel, fromException,
-                                                isEmptyMVar, newEmptyMVar,
-                                                newTQueueIO, newTVarIO, poll,
-                                                putMVar, readMVar, readTQueue,
+                                                isEmptyMVar, mask_,
+                                                newEmptyMVar, newTQueueIO,
+                                                newTVarIO, poll, putMVar,
+                                                readMVar, readTQueue,
                                                 readTVarIO, takeMVar,
                                                 throwString, wait, withAsync,
+                                                withAsyncWithUnmask,
                                                 writeTQueue, writeTVar)
 import           UnliftIO.Concurrent           (ThreadId, killThread,
                                                 myThreadId, threadDelay)
@@ -168,8 +170,142 @@ spec = do
                 r1 <- call (CallTimeout 10000) srvQ AskFst
                 (r1 :: Maybe Int) `shouldBe` Nothing
 
+    describe "Monitored IO action" $ do
+        it "reports exit code Normal on normal exit" $ do
+            trigger <- newEmptyMVar
+            mark <- newEmptyMVar
+            let monitor reason tid  = putMVar mark (reason, tid)
+                monitoredAction     = installMonitor monitor $ readMVar trigger $> ()
+            mask_ $ withAsyncWithUnmask monitoredAction $ \a -> do
+                noReport <- isEmptyMVar mark
+                noReport `shouldBe` True
+                putMVar trigger ()
+                report <- takeMVar mark
+                report `shouldBe` (Normal, asyncThreadId a)
+
+        it "reports exit code UncaughtException on synchronous exception which wasn't caught" $ do
+            trigger <- newEmptyMVar
+            mark <- newEmptyMVar
+            let monitor reason tid  = putMVar mark (reason, tid)
+                monitoredAction     = installMonitor monitor $ readMVar trigger *> throwString "oops" $> ()
+            mask_ $ withAsyncWithUnmask monitoredAction $ \a -> do
+                noReport <- isEmptyMVar mark
+                noReport `shouldBe` True
+                putMVar trigger ()
+                (reason, tid) <- takeMVar mark
+                tid `shouldBe` asyncThreadId a
+                reasonToString reason `shouldBe` "oops"
+
+        it "reports exit code Killed when it received asynchronous exception" $ do
+            blocker <- newEmptyMVar
+            mark <- newEmptyMVar
+            let monitor reason tid  = putMVar mark (reason, tid)
+                monitoredAction     = installMonitor monitor $ readMVar blocker $> ()
+            mask_ $ withAsyncWithUnmask monitoredAction $ \a -> do
+                noReport <- isEmptyMVar mark
+                noReport `shouldBe` True
+                cancel a
+                report <- takeMVar mark
+                report `shouldBe` (Killed, asyncThreadId a)
+
+        it "can nest monitors and notify its normal exit to both" $ do
+            trigger <- newEmptyMVar
+            mark1 <- newEmptyMVar
+            mark2 <- newEmptyMVar
+            let monitor1 reason tid = putMVar mark1 (reason, tid)
+                monitoredAction1    = installMonitor monitor1 $ readMVar trigger $> ()
+                monitor2 reason tid = putMVar mark2 (reason, tid)
+                monitoredAction2    = installNestedMonitor monitor2 monitoredAction1
+            mask_ $ withAsyncWithUnmask monitoredAction2 $ \a -> do
+                noReport1 <- isEmptyMVar mark1
+                noReport1 `shouldBe` True
+                noReport2 <- isEmptyMVar mark2
+                noReport2 `shouldBe` True
+                putMVar trigger ()
+                report1 <- takeMVar mark1
+                report1 `shouldBe` (Normal, asyncThreadId a)
+                report2 <- takeMVar mark2
+                report2 `shouldBe` (Normal, asyncThreadId a)
+
+        it "can nest monitors and notify UncaughtException to both" $ do
+            trigger <- newEmptyMVar
+            mark1 <- newEmptyMVar
+            mark2 <- newEmptyMVar
+            let monitor1 reason tid = putMVar mark1 (reason, tid)
+                monitoredAction1    = installMonitor monitor1 $ readMVar trigger *> throwString "oops" $> ()
+                monitor2 reason tid = putMVar mark2 (reason, tid)
+                monitoredAction2    = installNestedMonitor monitor2 monitoredAction1
+            mask_ $ withAsyncWithUnmask monitoredAction2 $ \a -> do
+                noReport1 <- isEmptyMVar mark1
+                noReport1 `shouldBe` True
+                noReport2 <- isEmptyMVar mark2
+                noReport2 `shouldBe` True
+                putMVar trigger ()
+                (reason1, tid1) <- takeMVar mark1
+                tid1 `shouldBe` asyncThreadId a
+                reasonToString reason1 `shouldBe` "oops"
+                (reason2, tid2) <- takeMVar mark2
+                tid2 `shouldBe` asyncThreadId a
+                reasonToString reason1 `shouldBe` "oops"
+
+        it "can nest monitors and notify Killed to both" $ do
+            blocker <- newEmptyMVar
+            mark1 <- newEmptyMVar
+            mark2 <- newEmptyMVar
+            let monitor1 reason tid = putMVar mark1 (reason, tid)
+                monitoredAction1    = installMonitor monitor1 $ readMVar blocker $> ()
+                monitor2 reason tid = putMVar mark2 (reason, tid)
+                monitoredAction2    = installNestedMonitor monitor2 monitoredAction1
+            mask_ $ withAsyncWithUnmask monitoredAction2 $ \a -> do
+                noReport1 <- isEmptyMVar mark1
+                noReport1 `shouldBe` True
+                noReport2 <- isEmptyMVar mark2
+                noReport2 `shouldBe` True
+                cancel a
+                report1 <- takeMVar mark1
+                report1 `shouldBe` (Killed, asyncThreadId a)
+                report2 <- takeMVar mark2
+                report2 `shouldBe` (Killed, asyncThreadId a)
+
+        it "can nest many monitors and notify its normal exit to all" $ do
+            trigger <- newEmptyMVar
+            marks <- for [1..100] $ const newEmptyMVar
+            let monitors              = map (\mark -> \reason tid -> putMVar mark (reason, tid)) marks
+                nestedMonitoredAction = foldr installNestedMonitor (installNullMonitor $ readMVar trigger $> ()) monitors
+            mask_ $ withAsyncWithUnmask nestedMonitoredAction $ \a -> do
+                noReports <- for marks isEmptyMVar
+                noReports `shouldSatisfy` and
+                putMVar trigger ()
+                reports <- for marks takeMVar
+                reports `shouldSatisfy` and . map (== (Normal, asyncThreadId a))
+
+        it "can nest many monitors and notify UncaughtException to all" $ do
+            trigger <- newEmptyMVar
+            marks <- for [1..100] $ const newEmptyMVar
+            let monitors              = map (\mark -> \reason tid -> putMVar mark (reason, tid)) marks
+                nestedMonitoredAction = foldr installNestedMonitor (installNullMonitor $ readMVar trigger *> throwString "oops" $> ()) monitors
+            mask_ $ withAsyncWithUnmask nestedMonitoredAction $ \a -> do
+                noReports <- for marks isEmptyMVar
+                noReports `shouldSatisfy` and
+                putMVar trigger ()
+                reports <- for marks takeMVar
+                reports `shouldSatisfy` and . map ((==) (asyncThreadId a) . snd)
+                reports `shouldSatisfy` and . map ((==) "oops" . reasonToString . fst)
+
+        it "can nest many monitors and notify Killed to all" $ do
+            blocker <- newEmptyMVar
+            marks <- for [1..100] $ const newEmptyMVar
+            let monitors              = map (\mark -> \reason tid -> putMVar mark (reason, tid)) marks
+                nestedMonitoredAction = foldr installNestedMonitor (installNullMonitor $ readMVar blocker $> ()) monitors
+            mask_ $ withAsyncWithUnmask nestedMonitoredAction $ \a -> do
+                noReports <- for marks isEmptyMVar
+                noReports `shouldSatisfy` and
+                cancel a
+                reports <- for marks takeMVar
+                reports `shouldSatisfy` and . map (== (Killed, asyncThreadId a))
+
     describe "SimpleOneForOneSupervisor" $ do
-        it "it starts a dynamic child" $ do
+        it "starts a dynamic child" $ do
             trigger <- newEmptyMVar
             mark <- newEmptyMVar
             blocker <- newEmptyMVar

@@ -64,6 +64,9 @@ module Control.Concurrent.Supervisor
     , Restart (..)
     , ExitReason (..)
     , Monitor
+    , installMonitor
+    , installNestedMonitor
+    , installNullMonitor
     , ProcessSpec
     , newProcessSpec
     , addMonitor

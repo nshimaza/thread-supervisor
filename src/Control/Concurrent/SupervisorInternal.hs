@@ -28,7 +28,7 @@ import           UnliftIO            (Async, IORef, STM, SomeException, TMVar,
                                       newEmptyTMVarIO, newIORef, newTQueueIO,
                                       newTVarIO, putTMVar, readIORef,
                                       readTQueue, readTVar, readTVarIO,
-                                      retrySTM, takeTMVar, timeout,
+                                      retrySTM, takeTMVar, throwIO, timeout,
                                       tryReadTQueue, uninterruptibleMask_,
                                       writeIORef, writeTQueue, writeTVar)
 import           UnliftIO.Concurrent (ThreadId, myThreadId)
@@ -348,6 +348,33 @@ type Monitor
     = ExitReason    -- ^ Reason of thread termination.
     -> ThreadId     -- ^ ID of terminated thread.
     -> IO ()
+
+{-|
+    'MonitoredAction' is type synonym of function with callback on termination installed.  Its type signature is same as
+    function argument for 'asyncWithUnmask'.
+-}
+type MonitoredAction = ((IO () -> IO ()) -> IO ())
+
+-- | Install 'Monitor' callback function to simple IO action.
+installMonitor :: Monitor -> IO () -> MonitoredAction
+installMonitor monitor = installNestedMonitor monitor . installNullMonitor
+
+-- | Convert simple IO action to 'MonitoredAction'
+installNullMonitor :: IO () -> MonitoredAction
+installNullMonitor action unmask = unmask action
+
+-- | Install another 'Monitor' callback function to 'MonitoredAction.
+installNestedMonitor :: Monitor -> MonitoredAction -> MonitoredAction
+installNestedMonitor monitor monitoredAction unmask = do
+    reason <- newIORef Killed
+    ((monitoredAction unmask *> writeIORef reason Normal) `catch` (writeIORef reason . UncaughtException))
+        `finally` (readIORef reason >>= \r -> myThreadId >>= report r)
+  where
+    report r tid = do
+        monitor r tid
+        case r of
+            UncaughtException e -> throwIO e
+            _                   -> pure ()
 
 {-|
     'ProcessSpec' is representation of IO action which can be supervised by supervisor.
