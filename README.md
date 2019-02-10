@@ -89,27 +89,23 @@ it uninstalls handlers at actual dynamic thread termination.
 
 
 
+# Quick Start
 
-# Usage
+## High level steps to use
 
-## Supervisor behavior
-TBD
-
-Implement your worker actor as a "process" which can be supervised.
-
-### High level steps to use
-
-1. Create a `MessageQueue` for your actor
-1. Create an IO action handling the `MessageQueue`
-1. Create a `ProcessSpec` from the IO action
+1. Create a `MonitoredAction` from your IO action
+1. Create a `ProcessSpec` from your the `MonitoredAction`
 1. Let a supervisor run the `ProcessSpec` in a supervised thread
 
-### Create a static process
+Detail will be different whether you create static process or dynamic process.
+
+## Create a static process
 
 Static process is thread automatically forked when supervisor starts.
 Following procedure makes your IO action a static process.
 
-1. Create a `ProcessSpec` from your IO action
+1. Create a `MonitoredAction` from your IO action
+1. Create a `ProcessSpec` from the `MonitoredAction`
 1. Give the `ProcessSpec` to `newSupervisor`
 1. Run generated supervisor
 
@@ -121,27 +117,35 @@ takes restart action based on restart restart type of terminated static process.
 A supervisor can have any number of static processes.  Static processes must be
 given when supervisor is created by `newSupervisor`.
 
-#### Static process example
+## Static process example
 
-Following code creates a supervisor with two static processes.
+Following code creates a supervisor actor with two static processes and run it
+in new thread.
 
 ```haskell
-createYourSupervisorWithStaticProcess = do
-    svQ <- newMessageQueue
-    newSupervisor svQ OneForAll def
-        [ newProcessSpec [] Permanent yourIOAction1
-        , newProcessSpec [] Permanent yourIOAction2
+runYourSupervisorWithStaticProcess = do
+    (svQ, svAction) <- newActor . newSupervisor $ OneForAll def
+        [ newProcessSpec Permanent $ noWatch yourIOAction1
+        , newProcessSpec Permanent $ noWatch yourIOAction2
         ]
+    async svAction
 ```
 
-`newSupervisor` returns an `IO ()` IO action.  When the IO action actually
-evaluated, it automatically forks two threads.  One is for `yourIOAction1` and
-the other is for `yourIOAction2`.  Because restart type of `yourIOAction1` is
-`Permanent`, the supervisor always kicks restarting action when one of
-`yourIOAction1` or `yourIOAction2` terminated.  When restarting action is
-kicked, the supervisor kills remaining thread and restarts all processes again.
+The idiom `newActor . newSupervisor` returns `(svQ, svAction)` where `svQ` is
+write-end of message queue for the supervisor actor, which we don't use here,
+and `svAction` is body IO action of the supervisor.  When the `svAction` is
+actually evaluated, it automatically forks two threads.  One is for
+`yourIOAction1` and the other is for `yourIOAction2`.  Because restart type of
+`yourIOAction1` is `Permanent`, the supervisor always kicks restarting action
+when one of `yourIOAction1` or `yourIOAction2` is terminated.  When restarting
+action is kicked, the supervisor kills remaining thread and restarts all
+processes again.
 
-### Create a dynamic process
+When the supervisor is terminated, both `yourIOAction1` and `yourIOAction2` are
+automatically terminated by the supervisor.  To terminate the supervisor, apply
+`cancel` to the async object returned by `async svAction`.
+
+## Create a dynamic process
 
 Dynamic process is thread explicitly forked via `newChild` function.
 Following procedure runs your IO action as a dynamic process.
@@ -155,21 +159,68 @@ Dynamic processes are explicitly forked to each thread via `newChild` request to
 running supervisor.  Supervisor never restarts dynamic process.  It ignores
 restart type defined in `ProcessSpec` of dynamic process.
 
-#### Dynamic process example
+## Dynamic process example
 
 Following code runs a supervisor in different thread then request it to run a
 dynamic process.
 
 ```haskell
-    -- Assume somewhere in a program
-    -- create a supervisor somewhere
-    svQ <- newMessageQueue
-    newSimpleOneForOneSupervisor svQ
-    -- Another place in a program
-    -- Assume the supervisor is already running on another thread
-    let yourProcessSpec = newProcessSpec [] Temporary yourIOAction
+    -- Run supervisor in another thread
+    (svQ, svAction) <- newActor $ newSimpleOneForOneSupervisor
+    asyncSv <- async svAction
+    -- Request to run your process under the supervisor
+    let yourProcessSpec = newProcessSpec Temporary $ noWatch yourIOAction
     maybeChildAsync <- newChild def svQ yourProcessSpec
 ```
+
+The idiom `newActor $ newSimpleOneForOneSupervisor` returns `(svQ, svAction)`
+where `svQ` is write-end of message queue for the supervisor actor and
+`svAction` is body IO action of the supervisor.  When the `svAction` is actually
+evaluated, it listens `svQ` and wait for request to run dynamic process.
+
+When `newChild` is called with `svQ`, it sends request to the supervisor to run
+a dynamic process with given `ProcessSpec`.
+
+When the supervisor is terminated, requested processes are automatically
+terminated by the supervisor if they are still running.
+
+To terminate the supervisor, apply `cancel` to `asyncSv`.
+
+
+
+# Building Blocks
+
+This package consists of following building blocks.
+
+* Actor and Message queue
+* Monitored IO action and supervisable process
+* Supervisor and underlying behaviors
+
+Actor and message queue is most lower layer building block of this package.
+Behaviors are built upon the block.  It is exposed to user so that you can use
+it for implementing actor style concurrent program.
+
+Monitored IO action is the heart of this package.  Most sensitive part for
+dealing with asynchronous exception is implemented here.  Monitored IO action
+provides guaranteed notification on thread termination so that supervisor can
+provide guaranteed supervision on threads.
+
+Lastly supervisors and underlying behaviors implement simplified Erlang/OTP
+behaviors to allow user leverage best practice of concurrent programming from
+Erlang/OTP.
+
+
+## Actor and Message queue
+
+
+
+## Supervisor behavior
+TBD
+
+Implement your worker actor as a "process" which can be supervised.
+
+
+
 
 ## Server behavior
 
@@ -242,14 +293,16 @@ But at the same time you cannot create child process directly from worker.
 * Dynamic processes are always `Temporary` processes
 * No `shutdown` method to terminate child
 * No `RestForOne` strategy
+* Every actor has dedicated Haskell thread
 
 
 ### Mutable variables are shared
 
 There is no "share nothing" concept in this package.  Message passed from one
 process to another process is shared between both processes.  This isn't a
-problem as long as message content is normal Haskell object because normal
-Haskell object is immutable so nobody mutate its value.
+problem as long as message content is normal Haskell object.  Normal Haskell
+object is immutable.  Nobody mutates its value.  So, in normal Haskell object,
+sharing is identical to copying.
 
 However, when you pass mutable object like IORef, MVar, or TVar, do it with
 care.  Those object can be mutated by other process.
@@ -275,16 +328,50 @@ from dealing with asynchronous exception.
 
 Only `OneForOne` and `OneForAll` restart strategy is supported.
 
+### Every actor has dedicated Haskell thread
+
+Unlike some of other actor implementations, each actor in this package has its
+own Haskell thread.  It means every actor has dedicated stack for each.  Thus
+calling blocking API in middle of message handling does *NOT* prevents other
+actor running.
+
+Some actor implementation give thread and stack to an actor only when it handles
+incoming message.  In such implementation, actor has no thread and stack when
+it is waiting for next message.  This maximizes scalability.  Even though there
+are billions of actors, you only need *n* threads and stacks while you have *n*
+core processor.
+
+Downside of such implementation is it strictly disallows blocking operation in
+middle of message handling.  In such implementation, calling blocking API in
+single threaded actor system causes entire actor system stalls until the
+blocking API returns.
+
+That doesn't happen in this package.  Though you call any blocking API in middle
+of actor message handler, other Haskell threads continue running.
+
+Giving dedicated thread to each actor requires giving dedicated stack frame to
+each actor too.  It consumes more memory than the above design.  However, in
+Haskell it won't be a serious problem.  These are the reason why.
+
+* In Haskell, size of stack frame starts from 1KB and grows as needed.
+* It can be moved by GC so no continuous address space is required at beginning.
+
+It is one of the greatest characteristic of GHC's runtime.  This package decided
+to leverage it.
+
 
 ## Resource management
 
 The word *resource* in this context means object kept in runtime but not
-garbage collected such like file handles, network sockets, and threads.  In
-Haskell, losing reference to those objects do *NOT* mean those objects will be
-closed or terminated.  You have to explicitly close handles and sockets,
-terminate threads before you lose reference to them.
+garbage collected.  For example, file handles, network sockets, and threads are
+resources.  In Haskell, losing reference to those objects does *NOT* mean those
+objects will be closed or terminated.  You have to explicitly close handles and
+sockets, terminate threads before you lose reference to them.
 
 This becomes more complex under threaded GHC environment.  Under GHC, thread
 can receive asynchronous exception in any timing.  You have to cleanup resources
 when your thread received asynchronous exception as well as in case of normal
 exit and synchronous exception scenario.
+
+This package does take care of threads managed by supervisor but you have to
+take care of any other resources.
