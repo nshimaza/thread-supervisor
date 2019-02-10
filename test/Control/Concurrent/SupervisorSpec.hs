@@ -175,7 +175,7 @@ spec = do
             trigger <- newEmptyMVar
             mark <- newEmptyMVar
             let monitor reason tid  = putMVar mark (reason, tid)
-                monitoredAction     = installMonitor monitor $ readMVar trigger $> ()
+                monitoredAction     = watch monitor $ readMVar trigger $> ()
             mask_ $ withAsyncWithUnmask monitoredAction $ \a -> do
                 noReport <- isEmptyMVar mark
                 noReport `shouldBe` True
@@ -187,7 +187,7 @@ spec = do
             trigger <- newEmptyMVar
             mark <- newEmptyMVar
             let monitor reason tid  = putMVar mark (reason, tid)
-                monitoredAction     = installMonitor monitor $ readMVar trigger *> throwString "oops" $> ()
+                monitoredAction     = watch monitor $ readMVar trigger *> throwString "oops" $> ()
             mask_ $ withAsyncWithUnmask monitoredAction $ \a -> do
                 noReport <- isEmptyMVar mark
                 noReport `shouldBe` True
@@ -200,7 +200,7 @@ spec = do
             blocker <- newEmptyMVar
             mark <- newEmptyMVar
             let monitor reason tid  = putMVar mark (reason, tid)
-                monitoredAction     = installMonitor monitor $ readMVar blocker $> ()
+                monitoredAction     = watch monitor $ readMVar blocker $> ()
             mask_ $ withAsyncWithUnmask monitoredAction $ \a -> do
                 noReport <- isEmptyMVar mark
                 noReport `shouldBe` True
@@ -213,9 +213,9 @@ spec = do
             mark1 <- newEmptyMVar
             mark2 <- newEmptyMVar
             let monitor1 reason tid = putMVar mark1 (reason, tid)
-                monitoredAction1    = installMonitor monitor1 $ readMVar trigger $> ()
+                monitoredAction1    = watch monitor1 $ readMVar trigger $> ()
                 monitor2 reason tid = putMVar mark2 (reason, tid)
-                monitoredAction2    = installNestedMonitor monitor2 monitoredAction1
+                monitoredAction2    = nestWatch monitor2 monitoredAction1
             mask_ $ withAsyncWithUnmask monitoredAction2 $ \a -> do
                 noReport1 <- isEmptyMVar mark1
                 noReport1 `shouldBe` True
@@ -232,9 +232,9 @@ spec = do
             mark1 <- newEmptyMVar
             mark2 <- newEmptyMVar
             let monitor1 reason tid = putMVar mark1 (reason, tid)
-                monitoredAction1    = installMonitor monitor1 $ readMVar trigger *> throwString "oops" $> ()
+                monitoredAction1    = watch monitor1 $ readMVar trigger *> throwString "oops" $> ()
                 monitor2 reason tid = putMVar mark2 (reason, tid)
-                monitoredAction2    = installNestedMonitor monitor2 monitoredAction1
+                monitoredAction2    = nestWatch monitor2 monitoredAction1
             mask_ $ withAsyncWithUnmask monitoredAction2 $ \a -> do
                 noReport1 <- isEmptyMVar mark1
                 noReport1 `shouldBe` True
@@ -253,9 +253,9 @@ spec = do
             mark1 <- newEmptyMVar
             mark2 <- newEmptyMVar
             let monitor1 reason tid = putMVar mark1 (reason, tid)
-                monitoredAction1    = installMonitor monitor1 $ readMVar blocker $> ()
+                monitoredAction1    = watch monitor1 $ readMVar blocker $> ()
                 monitor2 reason tid = putMVar mark2 (reason, tid)
-                monitoredAction2    = installNestedMonitor monitor2 monitoredAction1
+                monitoredAction2    = nestWatch monitor2 monitoredAction1
             mask_ $ withAsyncWithUnmask monitoredAction2 $ \a -> do
                 noReport1 <- isEmptyMVar mark1
                 noReport1 `shouldBe` True
@@ -271,7 +271,7 @@ spec = do
             trigger <- newEmptyMVar
             marks <- for [1..100] $ const newEmptyMVar
             let monitors              = map (\mark reason tid -> putMVar mark (reason, tid)) marks
-                nestedMonitoredAction = foldr installNestedMonitor (installNullMonitor $ readMVar trigger $> ()) monitors
+                nestedMonitoredAction = foldr nestWatch (noWatch $ readMVar trigger $> ()) monitors
             mask_ $ withAsyncWithUnmask nestedMonitoredAction $ \a -> do
                 noReports <- for marks isEmptyMVar
                 noReports `shouldSatisfy` and
@@ -283,7 +283,7 @@ spec = do
             trigger <- newEmptyMVar
             marks <- for [1..100] $ const newEmptyMVar
             let monitors              = map (\mark reason tid -> putMVar mark (reason, tid)) marks
-                nestedMonitoredAction = foldr installNestedMonitor (installNullMonitor $ readMVar trigger *> throwString "oops" $> ()) monitors
+                nestedMonitoredAction = foldr nestWatch (noWatch $ readMVar trigger *> throwString "oops" $> ()) monitors
             mask_ $ withAsyncWithUnmask nestedMonitoredAction $ \a -> do
                 noReports <- for marks isEmptyMVar
                 noReports `shouldSatisfy` and
@@ -296,7 +296,7 @@ spec = do
             blocker <- newEmptyMVar
             marks <- for [1..100] $ const newEmptyMVar
             let monitors              = map (\mark reason tid -> putMVar mark (reason, tid)) marks
-                nestedMonitoredAction = foldr installNestedMonitor (installNullMonitor $ readMVar blocker $> ()) monitors
+                nestedMonitoredAction = foldr nestWatch (noWatch $ readMVar blocker $> ()) monitors
             mask_ $ withAsyncWithUnmask nestedMonitoredAction $ \a -> do
                 noReports <- for marks isEmptyMVar
                 noReports `shouldSatisfy` and
@@ -312,7 +312,7 @@ spec = do
             var <- newTVarIO (0 :: Int)
             (svQ, sv) <- newActor newSimpleOneForOneSupervisor
             withAsync sv $ \_ -> do
-                maybeChildAsync <- newChild def svQ $ newProcessSpec Temporary $ installNullMonitor $ do
+                maybeChildAsync <- newChild def svQ $ newProcessSpec Temporary $ noWatch $ do
                     readMVar trigger
                     atomically $ writeTVar var 1
                     putMVar mark ()
@@ -331,7 +331,7 @@ spec = do
             withAsync sv $ \_ -> for_ [Permanent, Transient, Temporary] $ \restart -> do
                 mark <- newEmptyMVar
                 trigger <- newEmptyMVar
-                Just a <- newChild def svQ $ newProcessSpec restart $ installNullMonitor $ do
+                Just a <- newChild def svQ $ newProcessSpec restart $ noWatch $ do
                     putMVar mark ()
                     readMVar trigger
                     pure ()
@@ -347,12 +347,12 @@ spec = do
             withAsync sv $ \a -> do
                 blocker <- newEmptyMVar
                 for_ [1..10] $ \_ -> do
-                    Just a <- newChild def svQ $ newProcessSpec Permanent $ installNullMonitor $ readMVar blocker $> ()
+                    Just a <- newChild def svQ $ newProcessSpec Permanent $ noWatch $ readMVar blocker $> ()
                     cancel a
                 threadDelay 1000
                 r <- poll a
                 r `shouldSatisfy` isNothing
-                maybeAsync <- newChild def svQ $ newProcessSpec Permanent $ installNullMonitor $ readMVar blocker $> ()
+                maybeAsync <- newChild def svQ $ newProcessSpec Permanent $ noWatch $ readMVar blocker $> ()
                 isJust maybeAsync `shouldBe` True
 
         it "kills all children when it is killed" $ do
@@ -360,7 +360,7 @@ spec = do
                 childMon <- newEmptyMVar
                 (childQ, child) <- newActor $ simpleCountingServer n
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec Temporary $ installMonitor monitor $ child $> ()
+                    process             = newProcessSpec Temporary $ watch monitor $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             (svQ, sv) <- newActor newSimpleOneForOneSupervisor
@@ -377,7 +377,7 @@ spec = do
                 childMon <- newEmptyMVar
                 (childQ, child) <- newActor $ simpleCountingServer n
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec Temporary $ installMonitor monitor $ child $> ()
+                    process             = newProcessSpec Temporary $ watch monitor $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             (svQ, sv) <- newActor newSimpleOneForOneSupervisor
@@ -470,7 +470,7 @@ spec = do
                 childMon <- newEmptyMVar
                 (childQ, child) <- newActor $ simpleCountingServer n
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec Permanent $ installMonitor monitor $ child $> ()
+                    process             = newProcessSpec Permanent $ watch monitor $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             (svQ, sv) <- newActor $ newSupervisor OneForOne def procs
@@ -485,7 +485,7 @@ spec = do
                 childMon <- newEmptyMVar
                 (childQ, child) <- newActor $ simpleCountingServer n
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec Permanent $ installMonitor monitor $ child $> ()
+                    process             = newProcessSpec Permanent $ watch monitor $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             (svQ, sv) <- newActor $ newSupervisor OneForOne def { restartSensitivityIntensity = 3 } procs
@@ -508,7 +508,7 @@ spec = do
                 trigger <- newEmptyMVar
                 childMon <- newEmptyMVar
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec restart $ installMonitor monitor $ putMVar marker () *> takeMVar trigger $> ()
+                    process             = newProcessSpec restart $ watch monitor $ putMVar marker () *> takeMVar trigger $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
             (svQ, sv) <- newActor $ newSupervisor OneForOne def { restartSensitivityIntensity = 2 } procs
@@ -528,7 +528,7 @@ spec = do
                 trigger <- newEmptyMVar
                 childMon <- newEmptyMVar
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec restart $ installMonitor monitor $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
+                    process             = newProcessSpec restart $ watch monitor $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
             (svQ, sv) <- newActor $ newSupervisor OneForOne def { restartSensitivityIntensity = 2 } procs
@@ -548,7 +548,7 @@ spec = do
                 marker <- newEmptyMVar
                 childMon <- newEmptyMVar
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec restart $ installMonitor monitor $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
+                    process             = newProcessSpec restart $ watch monitor $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
             (svQ, sv) <- newActor $ newSupervisor OneForOne def { restartSensitivityIntensity = 2 } procs
@@ -566,7 +566,7 @@ spec = do
                 childMon <- newEmptyMVar
                 (childQ, child) <- newActor $ simpleCountingServer n
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec Permanent $ installMonitor monitor $ child $> ()
+                    process             = newProcessSpec Permanent $ watch monitor $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             (svQ, sv) <- newActor $ newSupervisor OneForOne def procs
@@ -582,7 +582,7 @@ spec = do
                 childMon <- newTQueueIO
                 (childQ, child) <- newActor $ simpleCountingServer n
                 let monitor reason tid  = atomically $ writeTQueue childMon (reason, tid)
-                    process             = newProcessSpec Permanent $ installMonitor monitor $ child $> ()
+                    process             = newProcessSpec Permanent $ watch monitor $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             (svQ, sv) <- newActor $ newSupervisor OneForOne def { restartSensitivityIntensity = 1000 } procs
@@ -604,7 +604,7 @@ spec = do
                 childMon <- newEmptyMVar
                 (childQ, child) <- newActor $ simpleCountingServer n
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec Permanent $ installMonitor monitor $ child $> ()
+                    process             = newProcessSpec Permanent $ watch monitor $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             (svQ, sv) <- newActor $ newSupervisor OneForOne def procs
@@ -630,7 +630,7 @@ spec = do
                 trigger <- newEmptyMVar
                 childMon <- newEmptyMVar
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec Permanent $ installMonitor monitor $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
+                    process             = newProcessSpec Permanent $ watch monitor $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
             (svQ, sv) <- newActor $ newSupervisor OneForOne def procs
@@ -655,7 +655,7 @@ spec = do
                 marker <- newEmptyMVar
                 childMon <- newEmptyMVar
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec Permanent $ installMonitor monitor $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
+                    process             = newProcessSpec Permanent $ watch monitor $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
             (svQ, sv) <- newActor $ newSupervisor OneForOne def procs
@@ -679,7 +679,7 @@ spec = do
                 childMon <- newEmptyMVar
                 (childQ, child) <- newActor $ simpleCountingServer n
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec Transient $ installMonitor monitor $ child $> ()
+                    process             = newProcessSpec Transient $ watch monitor $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             (svQ, sv) <- newActor $ newSupervisor OneForOne def procs
@@ -701,7 +701,7 @@ spec = do
                 trigger <- newEmptyMVar
                 childMon <- newEmptyMVar
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec Transient $ installMonitor monitor $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
+                    process             = newProcessSpec Transient $ watch monitor $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
             (svQ, sv) <- newActor $ newSupervisor OneForOne def procs
@@ -726,7 +726,7 @@ spec = do
                 marker <- newEmptyMVar
                 childMon <- newEmptyMVar
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec Transient $ installMonitor monitor $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
+                    process             = newProcessSpec Transient $ watch monitor $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
             (svQ, sv) <- newActor $ newSupervisor OneForOne def procs
@@ -750,7 +750,7 @@ spec = do
                 childMon <- newEmptyMVar
                 (childQ, child) <- newActor $ simpleCountingServer n
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec Temporary $ installMonitor monitor $ child $> ()
+                    process             = newProcessSpec Temporary $ watch monitor $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             (svQ, sv) <- newActor $ newSupervisor OneForOne def procs
@@ -772,7 +772,7 @@ spec = do
                 trigger <- newEmptyMVar
                 childMon <- newEmptyMVar
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec Temporary $ installMonitor monitor $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
+                    process             = newProcessSpec Temporary $ watch monitor $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
             (svQ, sv) <- newActor $ newSupervisor OneForOne def procs
@@ -792,7 +792,7 @@ spec = do
                 blocker <- newEmptyMVar
                 childMon <- newEmptyMVar
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec Temporary $ installMonitor monitor $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
+                    process             = newProcessSpec Temporary $ watch monitor $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
             (svQ, sv) <- newActor $ newSupervisor OneForOne def procs
@@ -810,7 +810,7 @@ spec = do
                 childMon <- newEmptyMVar
                 (childQ, child) <- newActor $ simpleCountingServer n
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec Permanent $ installMonitor monitor $ child $> ()
+                    process             = newProcessSpec Permanent $ watch monitor $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             (svQ, sv) <- newActor $ newSupervisor OneForOne def { restartSensitivityPeriod = TimeSpec 0 1000 } procs
@@ -832,7 +832,7 @@ spec = do
                 trigger <- newEmptyMVar
                 childMon <- newEmptyMVar
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec Transient $ installMonitor monitor $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
+                    process             = newProcessSpec Transient $ watch monitor $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
             (svQ, sv) <- newActor $ newSupervisor OneForOne def { restartSensitivityPeriod = TimeSpec 0 1000 } procs
@@ -852,7 +852,7 @@ spec = do
                 blocker <- newEmptyMVar
                 childMon <- newEmptyMVar
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec Transient $ installMonitor monitor $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
+                    process             = newProcessSpec Transient $ watch monitor $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
             (svQ, sv) <- newActor $ newSupervisor OneForOne def { restartSensitivityPeriod = TimeSpec 0 1000 } procs
@@ -871,7 +871,7 @@ spec = do
                 childMon <- newEmptyMVar
                 (childQ, child) <- newActor $ simpleCountingServer n
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec Permanent $ installMonitor monitor $ child $> ()
+                    process             = newProcessSpec Permanent $ watch monitor $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             (svQ, sv) <- newActor $ newSupervisor OneForAll def procs
@@ -886,7 +886,7 @@ spec = do
                 childMon <- newEmptyMVar
                 (childQ, child) <- newActor $ simpleCountingServer n
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec Permanent $ installMonitor monitor $ child $> ()
+                    process             = newProcessSpec Permanent $ watch monitor $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             (svQ, sv) <- newActor $ newSupervisor OneForAll def procs
@@ -909,7 +909,7 @@ spec = do
                 trigger <- newEmptyMVar
                 childMon <- newEmptyMVar
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec restart $ installMonitor monitor $ putMVar marker () *> takeMVar trigger $> ()
+                    process             = newProcessSpec restart $ watch monitor $ putMVar marker () *> takeMVar trigger $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
             (svQ, sv) <- newActor $ newSupervisor OneForAll def { restartSensitivityIntensity = 2 } procs
@@ -935,7 +935,7 @@ spec = do
                 trigger <- newEmptyMVar
                 childMon <- newEmptyMVar
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec restart $ installMonitor monitor $ (myThreadId >>= putMVar marker) *> takeMVar trigger *> throwString "oops" $> ()
+                    process             = newProcessSpec restart $ watch monitor $ (myThreadId >>= putMVar marker) *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
             (svQ, sv) <- newActor $ newSupervisor OneForAll def { restartSensitivityIntensity = 2 } procs
@@ -961,7 +961,7 @@ spec = do
                 trigger <- newEmptyMVar
                 childMon <- newEmptyMVar
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec restart $ installMonitor monitor $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
+                    process             = newProcessSpec restart $ watch monitor $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
             (svQ, sv) <- newActor $ newSupervisor OneForAll def procs
@@ -982,7 +982,7 @@ spec = do
                 trigger <- newEmptyMVar
                 childMon <- newEmptyMVar
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec restart $ installMonitor monitor $ (myThreadId >>= putMVar marker) *> takeMVar trigger *> throwString "oops" $> ()
+                    process             = newProcessSpec restart $ watch monitor $ (myThreadId >>= putMVar marker) *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
             (svQ, sv) <- newActor $ newSupervisor OneForAll def procs
@@ -1000,7 +1000,7 @@ spec = do
                 childMon <- newEmptyMVar
                 (childQ, child) <- newActor $ simpleCountingServer n
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec Permanent $ installMonitor monitor $ child $> ()
+                    process             = newProcessSpec Permanent $ watch monitor $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             (svQ, sv) <- newActor $ newSupervisor OneForAll def procs
@@ -1016,7 +1016,7 @@ spec = do
                 childMon <- newTQueueIO
                 (childQ, child) <- newActor $ simpleCountingServer n
                 let monitor reason tid  = atomically $ writeTQueue childMon (reason, tid)
-                    process             = newProcessSpec Permanent $ installMonitor monitor $ child $> ()
+                    process             = newProcessSpec Permanent $ watch monitor $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             (svQ, sv) <- newActor $ newSupervisor OneForAll def procs
@@ -1034,7 +1034,7 @@ spec = do
                 childMon <- newEmptyMVar
                 (childQ, child) <- newActor $ simpleCountingServer n
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec Permanent $ installMonitor monitor $ child $> ()
+                    process             = newProcessSpec Permanent $ watch monitor $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             (svQ, sv) <- newActor $ newSupervisor OneForAll def procs
@@ -1060,7 +1060,7 @@ spec = do
                 trigger <- newEmptyMVar
                 childMon <- newEmptyMVar
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec Permanent $ installMonitor monitor $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
+                    process             = newProcessSpec Permanent $ watch monitor $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
             (svQ, sv) <- newActor $ newSupervisor OneForAll def procs
@@ -1087,7 +1087,7 @@ spec = do
                 marker <- newEmptyMVar
                 childMon <- newEmptyMVar
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec Permanent $ installMonitor monitor $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
+                    process             = newProcessSpec Permanent $ watch monitor $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
             (svQ, sv) <- newActor $ newSupervisor OneForAll def procs
@@ -1111,7 +1111,7 @@ spec = do
                 childMon <- newEmptyMVar
                 (childQ, child) <- newActor $ simpleCountingServer n
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec Transient $ installMonitor monitor $ child $> ()
+                    process             = newProcessSpec Transient $ watch monitor $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             (svQ, sv) <- newActor $ newSupervisor OneForAll def procs
@@ -1133,7 +1133,7 @@ spec = do
                 trigger <- newEmptyMVar
                 childMon <- newEmptyMVar
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec Transient $ installMonitor monitor $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
+                    process             = newProcessSpec Transient $ watch monitor $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
             (svQ, sv) <- newActor $ newSupervisor OneForAll def procs
@@ -1160,7 +1160,7 @@ spec = do
                 marker <- newEmptyMVar
                 childMon <- newEmptyMVar
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec Transient $ installMonitor monitor $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
+                    process             = newProcessSpec Transient $ watch monitor $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
             (svQ, sv) <- newActor $ newSupervisor OneForAll def procs
@@ -1184,7 +1184,7 @@ spec = do
                 childMon <- newEmptyMVar
                 (childQ, child) <- newActor $ simpleCountingServer n
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec Temporary $ installMonitor monitor $ child $> ()
+                    process             = newProcessSpec Temporary $ watch monitor $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
             (svQ, sv) <- newActor $ newSupervisor OneForAll def procs
@@ -1206,7 +1206,7 @@ spec = do
                 trigger <- newEmptyMVar
                 childMon <- newEmptyMVar
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec Temporary $ installMonitor monitor $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
+                    process             = newProcessSpec Temporary $ watch monitor $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
             (svQ, sv) <- newActor $ newSupervisor OneForAll def procs
@@ -1226,7 +1226,7 @@ spec = do
                 blocker <- newEmptyMVar
                 childMon <- newEmptyMVar
                 let monitor reason tid  = putMVar childMon (reason, tid)
-                    process             = newProcessSpec Temporary $ installMonitor monitor $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
+                    process             = newProcessSpec Temporary $ watch monitor $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
             (svQ, sv) <- newActor $ newSupervisor OneForAll def procs
@@ -1242,7 +1242,7 @@ spec = do
         it "longer interval multiple normal exit of permanent child does not terminate Supervisor" $ do
             rs <- for [1..10] $ \n -> do
                 (childQ, child) <- newActor $ simpleCountingServer n
-                let process             = newProcessSpec Permanent $ installNullMonitor $ child $> ()
+                let process             = newProcessSpec Permanent $ noWatch $ child $> ()
                 pure (childQ, process)
             let (childQs, procs) = unzip rs
             (svQ, sv) <- newActor $ newSupervisor OneForAll def { restartSensitivityPeriod = TimeSpec 0 1000 } procs
@@ -1262,7 +1262,7 @@ spec = do
             rs <- for [1..10] $ \n -> do
                 marker <- newTVarIO False
                 trigger <- newEmptyMVar
-                let process             = newProcessSpec Transient $ installNullMonitor $ atomically (writeTVar marker True) *> takeMVar trigger *> throwString "oops" $> ()
+                let process             = newProcessSpec Transient $ noWatch $ atomically (writeTVar marker True) *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, process)
             let (markers, triggers, procs) = unzip3 rs
             (svQ, sv) <- newActor $ newSupervisor OneForAll def { restartSensitivityPeriod = TimeSpec 0 1000 } procs
@@ -1283,7 +1283,7 @@ spec = do
             rs <- for [1..3] $ \n -> do
                 marker <- newTVarIO myTid
                 blocker <- newEmptyMVar
-                let process             = newProcessSpec Transient $ installNullMonitor $ (myThreadId >>= atomically . writeTVar marker) *> takeMVar blocker $> ()
+                let process             = newProcessSpec Transient $ noWatch $ (myThreadId >>= atomically . writeTVar marker) *> takeMVar blocker $> ()
                 pure (marker, process)
             let (markers, procs) = unzip rs
             (svQ, sv) <- newActor $ newSupervisor OneForAll def procs

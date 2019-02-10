@@ -312,19 +312,6 @@ callIgnore srv req = send srv $ req (\_ -> pure ())
     Supervisable IO action.
 -}
 
-{-|
-    'Restart' defines when a terminated child thread triggers restart operation by its supervisor.  'Restart' only
-    defines when it triggers restart operation.  It does not directly means if the thread will be or will not be
-    restarted.  It is determined by restart strategy of supervisor.  For example, a static 'Temporary' thread never
-    triggers restart on its termination but static 'Temporary' thread will be restarted if another 'Permanent' or
-    'Transient' thread with common supervisor triggered restart operation and the supervisor has 'OneForAll' strategy.
--}
-data Restart
-    = Permanent -- ^ 'Permanent' thread always triggers restart.
-    | Transient -- ^ 'Transient' thread triggers restart only if it was terminated by exception.
-    | Temporary -- ^ 'Temporary' thread never triggers restart.
-    deriving (Eq, Show)
-
 -- | 'ExitReason' indicates reason of thread termination.
 data ExitReason
     = Normal                            -- ^ Thread was normally finished.
@@ -341,22 +328,22 @@ type Monitor
     -> IO ()
 
 {-|
-    'MonitoredAction' is type synonym of function with callback on termination installed.  Its type signature is same as
-    function argument for 'asyncWithUnmask'.
+    'MonitoredAction' is type synonym of function with callback on termination installed.  Its type signature fits to
+    argument for 'asyncWithUnmask'.
 -}
-type MonitoredAction = ((IO () -> IO ()) -> IO ())
+type MonitoredAction = (IO () -> IO ()) -> IO ()
 
 -- | Install 'Monitor' callback function to simple IO action.
-installMonitor :: Monitor -> IO () -> MonitoredAction
-installMonitor monitor = installNestedMonitor monitor . installNullMonitor
+watch :: Monitor -> IO () -> MonitoredAction
+watch monitor = nestWatch monitor . noWatch
 
--- | Convert simple IO action to 'MonitoredAction'
-installNullMonitor :: IO () -> MonitoredAction
-installNullMonitor action unmask = unmask action
+-- | Convert simple IO action to 'MonitoredAction' without installing 'Monitor'.
+noWatch :: IO () -> MonitoredAction
+noWatch action unmask = unmask action
 
--- | Install another 'Monitor' callback function to 'MonitoredAction.
-installNestedMonitor :: Monitor -> MonitoredAction -> MonitoredAction
-installNestedMonitor monitor monitoredAction unmask = do
+-- | Install another 'Monitor' callback function to 'MonitoredAction'.
+nestWatch :: Monitor -> MonitoredAction -> MonitoredAction
+nestWatch monitor monitoredAction unmask = do
     reason <- newIORef Killed
     ((monitoredAction unmask *> writeIORef reason Normal) `catch` (writeIORef reason . UncaughtException))
         `finally` (readIORef reason >>= \r -> myThreadId >>= report r)
@@ -368,16 +355,28 @@ installNestedMonitor monitor monitoredAction unmask = do
             _                   -> pure ()
 
 {-|
+    'Restart' defines when terminated child thread triggers restart operation by its supervisor.  'Restart' only
+    defines when it triggers restart operation.  It does not directly means if the thread will be or will not be
+    restarted.  It is determined by restart strategy of supervisor.  For example, a static 'Temporary' thread never
+    triggers restart on its termination but static 'Temporary' thread will be restarted if another 'Permanent' or
+    'Transient' thread with common supervisor triggered restart operation and the supervisor has 'OneForAll' strategy.
+-}
+data Restart
+    = Permanent -- ^ 'Permanent' thread always triggers restart.
+    | Transient -- ^ 'Transient' thread triggers restart only if it was terminated by exception.
+    | Temporary -- ^ 'Temporary' thread never triggers restart.
+    deriving (Eq, Show)
+
+{-|
     'ProcessSpec' is representation of IO action which can be supervised by supervisor.  Supervisor can run the IO
-    action with separate thread, monitor its termination and restart it based on restart type.  Additionally, user can
-    also receive notification on its termination by supplying user\'s own callback functions.
+    action with separate thread, watch its termination and restart it based on restart type.
 -}
 data ProcessSpec = ProcessSpec Restart MonitoredAction
 
 -- | Create a 'ProcessSpec'.
 newProcessSpec
     :: Restart          -- ^ Restart type of resulting 'ProcessSpec'.  One of 'Permanent', 'Transient' or 'Temporary'.
-    -> MonitoredAction  -- ^ User supplied IO action which the 'ProcessSpec' actually does.
+    -> MonitoredAction  -- ^ User supplied monitored IO action which the 'ProcessSpec' actually does.
     -> ProcessSpec
 newProcessSpec = ProcessSpec
 
@@ -386,7 +385,7 @@ addMonitor
     :: Monitor      -- ^ Callback function called when the IO action of the 'ProcessSpec' terminated.
     -> ProcessSpec  -- ^ Existing 'ProcessSpec' where the 'Monitor' is going to be added.
     -> ProcessSpec  -- ^ Newly created 'ProcessSpec' with the 'Monitor' added.
-addMonitor monitor (ProcessSpec restart monitoredAction) = ProcessSpec restart $ installNestedMonitor monitor monitoredAction
+addMonitor monitor (ProcessSpec restart monitoredAction) = ProcessSpec restart $ nestWatch monitor monitoredAction
 
 {-|
     'ProcessMap' is mutable variable which holds pool of living threads and 'ProcessSpec' of each thread.
