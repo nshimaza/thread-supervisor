@@ -112,7 +112,7 @@ Following procedure makes your IO action a static process.
 Static processes are automatically forked to each thread when supervisor started
 or one-for-all supervisor performed restarting action. When IO action inside of
 static process terminated, regardless normal completion or exception, supervisor
-takes restart action based on restart restart type of terminated static process.
+takes restart action based on restart type of terminated static process.
 
 A supervisor can have any number of static processes.  Static processes must be
 given when supervisor is created by `newSupervisor`.
@@ -136,14 +136,14 @@ write-end of message queue for the supervisor actor, which we don't use here,
 and `svAction` is body IO action of the supervisor.  When the `svAction` is
 actually evaluated, it automatically forks two threads.  One is for
 `yourIOAction1` and the other is for `yourIOAction2`.  Because restart type of
-`yourIOAction1` is `Permanent`, the supervisor always kicks restarting action
-when one of `yourIOAction1` or `yourIOAction2` is terminated.  When restarting
-action is kicked, the supervisor kills remaining thread and restarts all
-processes again.
+given static processes are both `Permanent`, the supervisor always kicks
+restarting action when one of `yourIOAction1` or `yourIOAction2` is terminated.
+When restarting action is kicked, the supervisor kills remaining thread and
+restarts all processes again because its restarting strategy is one-for-all.
 
 When the supervisor is terminated, both `yourIOAction1` and `yourIOAction2` are
-automatically terminated by the supervisor.  To terminate the supervisor, apply
-`cancel` to the async object returned by `async svAction`.
+automatically killed by the supervisor.  To kill the supervisor, apply `cancel`
+to the async object returned by `async svAction`.
 
 ## Create a dynamic process
 
@@ -182,9 +182,9 @@ When `newChild` is called with `svQ`, it sends request to the supervisor to run
 a dynamic process with given `ProcessSpec`.
 
 When the supervisor is terminated, requested processes are automatically
-terminated by the supervisor if they are still running.
+killed by the supervisor if they are still running.
 
-To terminate the supervisor, apply `cancel` to `asyncSv`.
+To kill the supervisor, apply `cancel` to `asyncSv`.
 
 
 
@@ -196,18 +196,18 @@ This package consists of following building blocks.
 * Monitored IO action and supervisable process
 * Supervisor and underlying behaviors
 
-Actor and message queue is most lower layer building block of this package.
-Behaviors are built upon the block.  It is exposed to user so that you can use
-it for implementing actor style concurrent program.
+Actor and message queue is most lower layer block of this package.  Behaviors
+are built upon this block.  It is exposed to user so that you can use it for
+implementing actor style concurrent program.
 
 Monitored IO action is the heart of this package.  Most sensitive part for
 dealing with asynchronous exception is implemented here.  Monitored IO action
 provides guaranteed notification on thread termination so that supervisor can
 provide guaranteed supervision on threads.
 
-Lastly supervisors and underlying behaviors implement simplified Erlang/OTP
-behaviors to allow user leverage best practice of concurrent programming from
-Erlang/OTP.
+Lastly supervisor and underlying behaviors implement simplified Erlang/OTP
+behaviors so that user can leverage best practice of concurrent programming
+from Erlang/OTP.
 
 
 ## Actor and Message queue
