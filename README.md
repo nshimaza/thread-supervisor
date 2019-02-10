@@ -94,7 +94,7 @@ it uninstalls handlers at actual dynamic thread termination.
 ## High level steps to use
 
 1. Create a `MonitoredAction` from your IO action
-1. Create a `ProcessSpec` from your the `MonitoredAction`
+1. Create a `ProcessSpec` from the `MonitoredAction`
 1. Let a supervisor run the `ProcessSpec` in a supervised thread
 
 Detail will be different whether you create static process or dynamic process.
