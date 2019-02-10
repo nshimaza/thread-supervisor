@@ -270,39 +270,39 @@ spec = do
         it "can nest many monitors and notify its normal exit to all" $ do
             trigger <- newEmptyMVar
             marks <- for [1..100] $ const newEmptyMVar
-            let monitors              = map (\mark -> \reason tid -> putMVar mark (reason, tid)) marks
+            let monitors              = map (\mark reason tid -> putMVar mark (reason, tid)) marks
                 nestedMonitoredAction = foldr installNestedMonitor (installNullMonitor $ readMVar trigger $> ()) monitors
             mask_ $ withAsyncWithUnmask nestedMonitoredAction $ \a -> do
                 noReports <- for marks isEmptyMVar
                 noReports `shouldSatisfy` and
                 putMVar trigger ()
                 reports <- for marks takeMVar
-                reports `shouldSatisfy` and . map (== (Normal, asyncThreadId a))
+                reports `shouldSatisfy` all (== (Normal, asyncThreadId a))
 
         it "can nest many monitors and notify UncaughtException to all" $ do
             trigger <- newEmptyMVar
             marks <- for [1..100] $ const newEmptyMVar
-            let monitors              = map (\mark -> \reason tid -> putMVar mark (reason, tid)) marks
+            let monitors              = map (\mark reason tid -> putMVar mark (reason, tid)) marks
                 nestedMonitoredAction = foldr installNestedMonitor (installNullMonitor $ readMVar trigger *> throwString "oops" $> ()) monitors
             mask_ $ withAsyncWithUnmask nestedMonitoredAction $ \a -> do
                 noReports <- for marks isEmptyMVar
                 noReports `shouldSatisfy` and
                 putMVar trigger ()
                 reports <- for marks takeMVar
-                reports `shouldSatisfy` and . map ((==) (asyncThreadId a) . snd)
-                reports `shouldSatisfy` and . map ((==) "oops" . reasonToString . fst)
+                reports `shouldSatisfy` all ((==) (asyncThreadId a) . snd)
+                reports `shouldSatisfy` all ((==) "oops" . reasonToString . fst)
 
         it "can nest many monitors and notify Killed to all" $ do
             blocker <- newEmptyMVar
             marks <- for [1..100] $ const newEmptyMVar
-            let monitors              = map (\mark -> \reason tid -> putMVar mark (reason, tid)) marks
+            let monitors              = map (\mark reason tid -> putMVar mark (reason, tid)) marks
                 nestedMonitoredAction = foldr installNestedMonitor (installNullMonitor $ readMVar blocker $> ()) monitors
             mask_ $ withAsyncWithUnmask nestedMonitoredAction $ \a -> do
                 noReports <- for marks isEmptyMVar
                 noReports `shouldSatisfy` and
                 cancel a
                 reports <- for marks takeMVar
-                reports `shouldSatisfy` and . map (== (Killed, asyncThreadId a))
+                reports `shouldSatisfy` all (== (Killed, asyncThreadId a))
 
     describe "SimpleOneForOneSupervisor" $ do
         it "starts a dynamic child" $ do
