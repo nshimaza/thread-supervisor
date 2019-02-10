@@ -49,7 +49,7 @@ data ConstServerCmd = AskFst (ServerCallback Int) | AskSnd (ServerCallback Char)
 
 data TickerServerCmd = Tick (ServerCallback Int) | Tack
 
-tickerServer :: MessageQueue TickerServerCmd -> IO Int
+tickerServer :: Inbox TickerServerCmd -> IO Int
 tickerServer = newStateMachine 0 handler
   where
     handler s (Tick cont) = cont s $> Right (s + 1)
@@ -59,42 +59,42 @@ data SimpleCountingServerCmd
     = CountUp (ServerCallback Int)
     | Finish
 
-simpleCountingServer :: Int -> MessageQueue SimpleCountingServerCmd -> IO Int
+simpleCountingServer :: Int -> Inbox SimpleCountingServerCmd -> IO Int
 simpleCountingServer n = newStateMachine n handler
   where
     handler s (CountUp cont) = cont s $> Right (s + 1)
     handler s Finish         = pure (Left s)
 
-callCountUp :: MessageQueueTail SimpleCountingServerCmd -> IO (Maybe Int)
+callCountUp :: Actor SimpleCountingServerCmd -> IO (Maybe Int)
 callCountUp q = call def q CountUp
 
-castFinish :: MessageQueueTail SimpleCountingServerCmd -> IO ()
+castFinish :: Actor SimpleCountingServerCmd -> IO ()
 castFinish q = cast q Finish
 
 spec :: Spec
 spec = do
     describe "Actor" $ do
-        prop "accepts ActorHandler and returns action with MessageQueueTail" $ \n -> do
+        prop "accepts ActorHandler and returns action with Actor" $ \n -> do
             mark <- newEmptyMVar
-            (qtail, action) <- newActor receive
-            sendMessage qtail (n :: Int)
+            (actor, action) <- newActor receive
+            send actor (n :: Int)
             r2 <- action
             r2 `shouldBe` n
 
         prop "can send a message to itself" $ \n -> do
             mark <- newEmptyMVar
-            (qtail, action) <- newActor $ \inbox -> do
+            (actor, action) <- newActor $ \inbox -> do
                 msg <- receive inbox
-                sendMessage (MessageQueueTail inbox) (msg + 1)
+                send (Actor inbox) (msg + 1)
                 receive inbox
-            sendMessage qtail (n :: Int)
+            send actor (n :: Int)
             r2 <- action
             r2 `shouldBe` (n + 1)
 
     describe "State machine behavior" $ do
         it "returns result when event handler returns Left" $ do
-            (qtail, statem) <- newActor $ newStateMachine () $ \_ _ -> pure $ Left "Hello"
-            sendMessage qtail ()
+            (actor, statem) <- newActor $ newStateMachine () $ \_ _ -> pure $ Left "Hello"
+            send actor ()
             r <- statem
             r `shouldBe` "Hello"
 
@@ -102,8 +102,8 @@ spec = do
             let until5 q 5 = pure $ Left ("Done", q)
                 until5 q _ = pure $ Right q
                 actorHandler inbox = newStateMachine inbox until5 inbox
-            (qtail, statem) <- newActor actorHandler
-            for_ [1..7] $ sendMessage qtail
+            (actor, statem) <- newActor actorHandler
+            for_ [1..7] $ send actor
             (r, lastQ) <- statem
             r `shouldBe` "Done"
             msg <- receive lastQ
@@ -112,16 +112,16 @@ spec = do
         it "passes next state with Right" $ do
             let handler True  _ = pure $ Right False
                 handler False _ = pure $ Left "Finished"
-            (qtail, statem) <- newActor $ newStateMachine True handler
-            for_ [(), ()] $ sendMessage qtail
+            (actor, statem) <- newActor $ newStateMachine True handler
+            for_ [(), ()] $ send actor
             r <- statem
             r `shouldBe` "Finished"
 
         it "runs state machine by consuming messages until handler returns Left" $ do
             let handler n 10 = pure $ Left (n + 10)
                 handler n x  = pure $ Right (n + x)
-            (qtail, statem) <- newActor $ newStateMachine 0 handler
-            for_ [1..100] $ sendMessage qtail
+            (actor, statem) <- newActor $ newStateMachine 0 handler
+            for_ [1..100] $ send actor
             r <- statem
             r `shouldBe` 55
 

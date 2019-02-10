@@ -37,63 +37,59 @@ import           Data.DelayedQueue   (DelayedQueue, newEmptyDelayedQueue, pop,
                                       push)
 
 {-
-    Message queue and selective receive.
+    Message queue for actor inbox and selective receive.
 -}
 {-|
     Message queue abstraction.
 -}
-data MessageQueue a = MessageQueue
-    { messageQueueInbox     :: TQueue a     -- ^ Concurrent queue receiving message from other threads.
-    , messageQueueLength    :: TVar Word    -- ^ Number of elements currently held by the 'MessageQueue'.
-    , messageQueueSaveStack :: TVar [a]    -- ^ Saved massage by 'receiveSelect'.  It keeps messages
-                                            --   not selected by receiveSelect in reversed order.
-                                            --   Latest message is kept at head of the list.
-    , messageQueueMaxBound  :: Word         -- ^ Maximum length of the 'MessageQueue'
+data Inbox a = Inbox
+    { inboxQueue     :: TQueue a    -- ^ Concurrent queue receiving message from other threads.
+    , inboxLength    :: TVar Word   -- ^ Number of elements currently held by the 'Inbox'.
+    , inboxSaveStack :: TVar [a]    -- ^ Saved massage by 'receiveSelect'.  It keeps messages
+                                    --   not selected by receiveSelect in reversed order.
+                                    --   Latest message is kept at head of the list.
+    , inboxMaxBound  :: Word        -- ^ Maximum length of the 'Inbox'
     }
 
--- | Maximum length of 'MessageQUeue'.
-newtype MessageQueueLength = MessageQueueLength Word
+-- | Maximum length of 'Inbox'.
+newtype InboxLength = InboxLength Word
 
-instance Default MessageQueueLength where
-    def = MessageQueueLength maxBound
+instance Default InboxLength where
+    def = InboxLength maxBound
 
--- | Write end of 'MessageQueue' exposed to outside of actor.
-newtype MessageQueueTail a = MessageQueueTail (MessageQueue a)
+-- | Write end of 'Inbox' exposed to outside of actor.
+newtype Actor a = Actor (Inbox a)
 
--- | Create a new empty 'MessageQueue'.
-newMessageQueue :: MessageQueueLength -> IO (MessageQueue a)
-newMessageQueue (MessageQueueLength upperBound) = MessageQueue <$> newTQueueIO <*> newTVarIO 0 <*> newTVarIO [] <*> pure upperBound
+-- | Create a new empty 'Inbox'.
+newInbox :: InboxLength -> IO (Inbox a)
+newInbox (InboxLength upperBound) = Inbox <$> newTQueueIO <*> newTVarIO 0 <*> newTVarIO [] <*> pure upperBound
 
--- -- | Create a new empty 'MessageQueue' with upper bound of length.
--- newBoundedMessageQueue :: Word -> IO (MessageQueue a)
--- newBoundedMessageQueue upperBound = MessageQueue <$> newTQueueIO <*> newTVarIO 0 <*> newIORef [] <*> pure upperBound
-
--- | Send a message to given 'MessageQueueTail'.  Block while the queue is full.
-sendMessage :: MessageQueueTail a -> a -> IO ()
-sendMessage (MessageQueueTail (MessageQueue inbox lenTVar _ limit)) msg = atomically $ do
+-- | Send a message to given 'Actor'.  Block while the queue is full.
+send :: Actor a -> a -> IO ()
+send (Actor (Inbox inbox lenTVar _ limit)) msg = atomically $ do
     len <- readTVar lenTVar
     if len < limit
     then modifyTVar' lenTVar succ *> writeTQueue inbox msg
     else retrySTM
 
--- | Try to send a message to given 'MessageQueueTail'.  Return Nothing if the queue is already full.
-trySendMessage :: MessageQueueTail a -> a -> IO (Maybe ())
-trySendMessage (MessageQueueTail (MessageQueue inbox lenTVar _ limit)) msg = atomically $ do
+-- | Try to send a message to given 'Actor'.  Return Nothing if the queue is already full.
+trySend :: Actor a -> a -> IO (Maybe ())
+trySend (Actor (Inbox inbox lenTVar _ limit)) msg = atomically $ do
     len <- readTVar lenTVar
     if len < limit
     then modifyTVar' lenTVar succ *> writeTQueue inbox msg $> Just ()
     else pure Nothing
 
--- | Number of elements currently held by the 'MessageQueueTail'.
-length:: MessageQueueTail a -> IO Word
-length (MessageQueueTail q) = readTVarIO $ messageQueueLength q
+-- | Number of elements currently held by the 'Actor'.
+length:: Actor a -> IO Word
+length (Actor q) = readTVarIO $ inboxLength q
 
 {-|
-    Perform selective receive from given 'MessageQueue'.
+    Perform selective receive from given 'Inbox'.
 
-    'receiveSelect' searches given queue for first interesting message predicated by user supplied function.
-    It applies the predicate to the queue, returns the first element that satisfy the predicate and mutates the
-    MessageQueue by removing the element found.
+    'receiveSelect' searches given queue for first interesting message predicated by user supplied function.  It applies
+    the predicate to the queue, returns the first element that satisfy the predicate and mutates the Inbox by removing
+    the element found.
 
     It blocks until interesting message arrived if no interesting message was found in the queue.
 
@@ -114,10 +110,10 @@ length (MessageQueueTail q) = readTVarIO $ messageQueueLength q
     Use this function in limited situation only.
 -}
 receiveSelect
-    :: (a -> Bool)      -- ^ Predicate to pick a interesting message.
-    -> MessageQueue a   -- ^ Message queue where interesting message searched for.
+    :: (a -> Bool)  -- ^ Predicate to pick a interesting message.
+    -> Inbox a      -- ^ Message queue where interesting message searched for.
     -> IO a
-receiveSelect predicate (MessageQueue inbox lenTVar saveStack _) = atomically $ do
+receiveSelect predicate (Inbox inbox lenTVar saveStack _) = atomically $ do
     saved <- readTVar saveStack
     case pickFromSaveStack predicate saved of
         (Just (msg, newSaved)) -> oneMessageRemoved lenTVar saveStack newSaved $> msg
@@ -130,11 +126,11 @@ receiveSelect predicate (MessageQueue inbox lenTVar saveStack _) = atomically $ 
         else go (msg:newSaved)
 
 {-|
-    Try to perform selective receive from given 'MessageQueue'.
+    Try to perform selective receive from given 'Inbox'.
 
-    'tryReceiveSelect' searches given queue for first interesting message predicated by user supplied function.
-    It applies the predicate to the queue, returns the first element that satisfy the predicate and mutates the
-    MessageQueue by removing the element found.
+    'tryReceiveSelect' searches given queue for first interesting message predicated by user supplied function.  It
+    applies the predicate to the queue, returns the first element that satisfy the predicate and mutates the Inbox by
+    removing the element found.
 
     It return Nothing if there is no interesting message found in the queue.
 
@@ -147,10 +143,10 @@ receiveSelect predicate (MessageQueue inbox lenTVar saveStack _) = atomically $ 
     Use this function in limited situation only.
 -}
 tryReceiveSelect
-    :: (a -> Bool)      -- ^ Predicate to pick a interesting message.
-    -> MessageQueue a   -- ^ Message queue where interesting message searched for.
+    :: (a -> Bool)  -- ^ Predicate to pick a interesting message.
+    -> Inbox a      -- ^ Message queue where interesting message searched for.
     -> IO (Maybe a)
-tryReceiveSelect predicate (MessageQueue inbox lenTVar saveStack _) = atomically $ do
+tryReceiveSelect predicate (Inbox inbox lenTVar saveStack _) = atomically $ do
     saved <- readTVar saveStack
     case pickFromSaveStack predicate saved of
         (Just (msg, newSaved)) -> oneMessageRemoved lenTVar saveStack newSaved $> Just msg
@@ -164,8 +160,8 @@ tryReceiveSelect predicate (MessageQueue inbox lenTVar saveStack _) = atomically
                      | otherwise        -> go (msg:newSaved)
 
 {-|
-    Removes oldest message satisfying predicate from saveStack and return the message and updated saveStack.
-    Returns Nothing if there is no satisfying message.
+    Removes oldest message satisfying predicate from 'saveStack' and return the message and updated saveStack.  Returns
+    'Nothing' if there is no satisfying message.
 -}
 pickFromSaveStack :: (a -> Bool) -> [a] -> Maybe (a, [a])
 pickFromSaveStack predicate saveStack = go [] $ reverse saveStack
@@ -174,56 +170,55 @@ pickFromSaveStack predicate saveStack = go [] $ reverse saveStack
     go newSaved (x:xs) | predicate x  = Just (x, foldl' (flip (:)) newSaved xs)
                        | otherwise    = go (x:newSaved) xs
 
--- | Mutate 'MessageQueue' when a message was removed from it.
+-- | Mutate 'Inbox' when a message was removed from it.
 oneMessageRemoved
     :: TVar Word    -- ^ 'TVar' holding current number of messages in the queue.
-    -> TVar [a]    -- ^ 'IORef' to saveStack to be overwritten.
+    -> TVar [a]     -- ^ 'IORef' to saveStack to be overwritten.
     -> [a]          -- ^ New saveStack to mutate given IORef
     -> STM ()
 oneMessageRemoved len saveStack newSaved = do
     modifyTVar' len pred
     writeTVar saveStack newSaved
 
--- | Receive first message in 'MessageQueue'.  Block until message available.
-receive :: MessageQueue a -> IO a
+-- | Receive first message in 'Inbox'.  Block until message available.
+receive :: Inbox a -> IO a
 receive = receiveSelect (const True)
 
--- | Try to receive first message in 'MessageQueue'.  It returns Nothing if there is no message available.
-tryReceive :: MessageQueue a -> IO (Maybe a)
+-- | Try to receive first message in 'Inbox'.  It returns Nothing if there is no message available.
+tryReceive :: Inbox a -> IO (Maybe a)
 tryReceive = tryReceiveSelect (const True)
 
--- | Type synomim of user supplied message handler inside actor.
-type ActorHandler a b = (MessageQueue a -> IO b)
+-- | Type synonym of user supplied message handler inside actor.
+type ActorHandler a b = (Inbox a -> IO b)
 
 {-|
     Create a new actor.
 
-    User have to supply a message handler function with 'ActorHandler' type.  It accepts a 'MessageQueue' and returns
-    anything.
+    User have to supply a message handler function with 'ActorHandler' type.  It accepts a 'Inbox' and returns anything.
 
-    'newActor' creates a new 'MessageQueue', apply user supplied message handler to the queue, returns reference to
-    write-end of the queue and IO action of the actor.  Because 'newActor' only returns 'MessageQueueTail' caller of
-    'newActor' can only send messages to created actor.
+    'newActor' creates a new 'Inbox', apply user supplied message handler to the queue, returns reference to write-end
+    of the queue and IO action of the actor.  Because 'newActor' only returns 'Actor', caller of 'newActor' can only
+    send messages to created actor but caller cannot receive message from the queue.
 
-    'MessageQueue' itself is passed to user supplied message handler so the handler can receive message to the actor.
-    If the handler need to send a message to itself, wrap the message queue by 'MessageQueueTail' constructor then
-    use 'sendMessage' over created 'MessageQueueTail'.
+    'Inbox', or read-end of the queue, is passed to user supplied message handler so the handler can receive message to
+    the actor.  If the handler need to send a message to itself, wrap the message queue by 'Actor' constructor then use
+    'send' over created 'Actor'.
 -}
 newActor
-    :: ActorHandler a b
-    -> IO (MessageQueueTail a, IO b)
+    :: ActorHandler a b     -- ^ IO action handling received messages.
+    -> IO (Actor a, IO b)
 newActor = newBoundedActor def
 
 {-|
     Create a new actor with bounded inbox queue.
 -}
 newBoundedActor
-    :: MessageQueueLength
-    -> ActorHandler a b
-    -> IO (MessageQueueTail a, IO b)
+    :: InboxLength          -- ^ Maximum length of inbox message queue.
+    -> ActorHandler a b     -- ^ IO action handling received messages.
+    -> IO (Actor a, IO b)
 newBoundedActor maxQLen handler = do
-    q <- newMessageQueue maxQLen
-    pure (MessageQueueTail q, handler q)
+    q <- newInbox maxQLen
+    pure (Actor q, handler q)
 
 {-
     State machine behavior.
@@ -231,17 +226,15 @@ newBoundedActor maxQLen handler = do
 {-|
     Create a new finite state machine.
 
-    The state machine waits for new message at 'MessageQueue' then callback message handler given by user.
-    The message handler must return 'Right' with new state or 'Left' with final result.
-    When 'Right' is returned, the state machine waits next message.
-    When 'Left' is returned, the state machine terminates and returns the result.
+    The state machine waits for new message at 'Inbox' then callback message handler given by user.  The message handler
+    must return 'Right' with new state or 'Left' with final result.  When 'Right' is returned, the state machine waits
+    next message.  When 'Left' is returned, the state machine terminates and returns the result.
 
-    'newStateMachine' returns an IO action wrapping the state machine described above.
-    The returned IO action can be executed within an 'Async' or bare thread.
+    'newStateMachine' returns an IO action wrapping the state machine described above.  The returned IO action can be
+    executed within an 'Async' or bare thread.
 
-    Created IO action is designed to run in separate thread from main thread.
-    If you try to run the IO action at main thread without having producer of the message queue you gave,
-    the state machine will dead lock.
+    Created IO action is designed to run in separate thread from main thread.  If you try to run the IO action at main
+    thread without having producer of the message queue you gave, the state machine will dead lock.
 -}
 newStateMachine
     :: state    -- ^ Initial state of the state machine.
@@ -264,10 +257,10 @@ type ServerCallback a = (a -> IO ())
     Send an asynchronous request to a server.
 -}
 cast
-    :: MessageQueueTail cmd -- ^ Message queue of the target server.
-    -> cmd                  -- ^ Request to the server.
+    :: Actor cmd    -- ^ Message queue of the target server.
+    -> cmd          -- ^ Request to the server.
     -> IO ()
-cast = sendMessage
+cast = send
 
 -- | Timeout of call method for server behavior in microseconds.  Default is 5 second.
 newtype CallTimeout = CallTimeout Int
@@ -280,27 +273,26 @@ instance Default CallTimeout where
 -}
 call
     :: CallTimeout              -- ^ Timeout.
-    -> MessageQueueTail cmd     -- ^ Message queue of the target server.
+    -> Actor cmd                -- ^ Message queue of the target server.
     -> ((a -> IO ()) -> cmd)    -- ^ Request to the server without callback supplied.
     -> IO (Maybe a)
 call (CallTimeout usec) srv req = do
     rVar <- newEmptyTMVarIO
-    sendMessage srv . req $ atomically . putTMVar rVar
+    send srv . req $ atomically . putTMVar rVar
     timeout usec . atomically . takeTMVar $ rVar
 
 {-|
-    Make an asynchronous call to a server and give result in CPS style.
-    The return value is delivered to given callback function.  It also can fail by timeout.
-    It is useful to convert return value of 'call' to a message of calling process asynchronously
-    so that calling process can continue processing instead of blocking at 'call'.
+    Make an asynchronous call to a server and give result in CPS style.  The return value is delivered to given callback
+    function.  It also can fail by timeout.  It is useful to convert return value of 'call' to a message of calling
+    process asynchronously so that calling process can continue processing instead of blocking at 'call'.
 
-    Use this function with care because there is no guaranteed cancellation of background worker
-    thread other than timeout.  Giving infinite timeout (zero) to the 'CallTimeout' argument may cause
-    the background thread left to run, possibly indefinitely.
+    Use this function with care because there is no guaranteed cancellation of background worker thread other than
+    timeout.  Giving infinite timeout (zero) to the 'CallTimeout' argument may cause the background thread left to run,
+    possibly indefinitely.
 -}
 callAsync
     :: CallTimeout              -- ^ Timeout.
-    -> MessageQueueTail cmd     -- ^ Message queue.
+    -> Actor cmd                -- ^ Message queue.
     -> ((a -> IO ()) -> cmd)    -- ^ Request to the server without callback supplied.
     -> (Maybe a -> IO b)        -- ^ callback to process return value of the call.  Nothing is given on timeout.
     -> IO (Async b)
@@ -310,10 +302,10 @@ callAsync timeout srv req cont = async $ call timeout srv req >>= cont
     Send an request to a server but ignore return value.
 -}
 callIgnore
-    :: MessageQueueTail cmd     -- ^ Message queue of the target server.
+    :: Actor cmd                -- ^ Message queue of the target server.
     -> ((a -> IO ()) -> cmd)    -- ^ Request to the server without callback supplied.
     -> IO ()
-callIgnore srv req = sendMessage srv $ req (\_ -> pure ())
+callIgnore srv req = send srv $ req (\_ -> pure ())
 
 
 {-
@@ -321,12 +313,11 @@ callIgnore srv req = sendMessage srv $ req (\_ -> pure ())
 -}
 
 {-|
-    'Restart' defines when a terminated child thread triggers restart operation by its supervisor.
-    'Restart' only define when it triggers restart operation.  It does not directly means if the thread
-    will be or will not be restarted.  It is determined by restart strategy of supervisor.
-    For example, a static 'Temporary' thread never trigger restart on its termination but static 'Temporary'
-    thread will be restarted if another 'Permanent' or 'Transient' thread with common supervisor triggered
-    restart operation and the supervisor has 'OneForAll' strategy.
+    'Restart' defines when a terminated child thread triggers restart operation by its supervisor.  'Restart' only
+    defines when it triggers restart operation.  It does not directly means if the thread will be or will not be
+    restarted.  It is determined by restart strategy of supervisor.  For example, a static 'Temporary' thread never
+    triggers restart on its termination but static 'Temporary' thread will be restarted if another 'Permanent' or
+    'Transient' thread with common supervisor triggered restart operation and the supervisor has 'OneForAll' strategy.
 -}
 data Restart
     = Permanent -- ^ 'Permanent' thread always triggers restart.
@@ -377,10 +368,9 @@ installNestedMonitor monitor monitoredAction unmask = do
             _                   -> pure ()
 
 {-|
-    'ProcessSpec' is representation of IO action which can be supervised by supervisor.
-    Supervisor can run the IO action with separate thread, monitor its termination and
-    restart it based on restart type.  Additionally, user can also receive notification
-    on its termination by supplying user\'s own callback functions.
+    'ProcessSpec' is representation of IO action which can be supervised by supervisor.  Supervisor can run the IO
+    action with separate thread, monitor its termination and restart it based on restart type.  Additionally, user can
+    also receive notification on its termination by supplying user\'s own callback functions.
 -}
 data ProcessSpec = ProcessSpec Restart MonitoredAction
 
@@ -425,10 +415,10 @@ newProcess procMap procSpec@(ProcessSpec _ monitoredAction) = mask_ $ do
     Restart intensity handling.
 -}
 {-|
-    'RestartSensitivity' defines condition how supervisor determines intensive restart is happening.
-    If more than 'restartSensitivityIntensity' time of restart is triggered within 'restartSensitivityPeriod',
-    supervisor decides intensive restart is happening and it terminates itself.
-    Default intensity (maximum number of acceptable restart) is 1.  Default period is 5 seconds.
+    'RestartSensitivity' defines condition how supervisor determines intensive restart is happening.  If more than
+    'restartSensitivityIntensity' time of restart is triggered within 'restartSensitivityPeriod', supervisor decides
+    intensive restart is happening and it terminates itself.  Default intensity (maximum number of acceptable restart)
+    is 1.  Default period is 5 seconds.
 -}
 data RestartSensitivity = RestartSensitivity
     { restartSensitivityIntensity :: Int        -- ^ Maximum number of restart accepted within the period below.
@@ -439,9 +429,8 @@ instance Default RestartSensitivity where
     def = RestartSensitivity 1 TimeSpec { sec = 5, nsec = 0 }
 
 {-|
-    'IntenseRestartDetector' keeps data used for detecting intense restart.
-    It keeps maxR (maximum restart intensity), maxT (period of majoring restart intensity) and
-    history of restart with system timestamp in 'Monotonic' form.
+    'IntenseRestartDetector' keeps data used for detecting intense restart.  It keeps maxR (maximum restart intensity),
+    maxT (period of majoring restart intensity) and history of restart with system timestamp in 'Monotonic' form.
 -}
 data IntenseRestartDetector = IntenseRestartDetector
     { intenseRestartDetectorPeriod  :: TimeSpec                 -- ^ Length of time window in 'TimeSpec' where the number of restarts is counted.
@@ -453,12 +442,11 @@ newIntenseRestartDetector :: RestartSensitivity -> IntenseRestartDetector
 newIntenseRestartDetector (RestartSensitivity maxR maxT) = IntenseRestartDetector maxT (newEmptyDelayedQueue maxR)
 
 {-|
-    Determine if the last restart results intensive restart.
-    It pushes the last restart timestamp to the 'DelayedQueue' of restart history held inside
-    of the IntenseRestartDetector then check if the oldest restart record is pushed out from the queue.
-    If no record was pushed out, there are less number of restarts than limit, so it is not intensive.
-    If a record was pushed out, it means we had one more restarts than allowed.
-    If the oldest restart and newest restart happened within allowed time interval, it is intensive.
+    Determine if the last restart results intensive restart.  It pushes the last restart timestamp to the 'DelayedQueue'
+    of restart history held inside of the IntenseRestartDetector then check if the oldest restart record is pushed out
+    from the queue.  If no record was pushed out, there are less number of restarts than limit, so it is not intensive.
+    If a record was pushed out, it means we had one more restarts than allowed.  If the oldest restart and newest
+    restart happened within allowed time interval, it is intensive.
 
     This function implements pure part of 'detectIntenseRestartNow'.
 -}
@@ -478,8 +466,7 @@ getCurrentTime :: IO TimeSpec
 getCurrentTime = getTime Monotonic
 
 {-|
-    Determine if intensive restart is happening now.
-    It is called when restart is triggered by some thread termination.
+    Determine if intensive restart is happening now.  It is called when restart is triggered by some thread termination.
 -}
 detectIntenseRestartNow
     :: IntenseRestartDetector   -- ^ Intense restart detector containing history of past restart with maxT and maxR.
@@ -496,9 +483,9 @@ data SupervisorMessage
     | StartChild ProcessSpec (ServerCallback (Async ()))    -- ^ Command to start a new supervised thread.
 
 -- | Type synonym for write-end of supervisor's message queue.
-type SupervisorQueue = MessageQueueTail SupervisorMessage
+type SupervisorQueue = Actor SupervisorMessage
 -- | Type synonym for read-end of supervisor's message queue.
-type SupervisorInbox = MessageQueue SupervisorMessage
+type SupervisorInbox = Inbox SupervisorMessage
 
 -- | Start a new thread with supervision.
 newSupervisedProcess
@@ -547,9 +534,9 @@ data Strategy
     | OneForAll -- ^ Restart all process supervised by the same supervisor of exited process.
 
 {-|
-    Create a supervisor with 'OneForOne' restart strategy and has no static 'ProcessSpec'.
-    When it started, it has no child threads.  Only 'newChild' can add new thread supervised by the supervisor.
-    Thus the simple one-for-one supervisor only manages dynamic and 'Temporary' children.
+    Create a supervisor with 'OneForOne' restart strategy and has no static 'ProcessSpec'.  When it started, it has no
+    child threads.  Only 'newChild' can add new thread supervised by the supervisor.  Thus the simple one-for-one
+    supervisor only manages dynamic and 'Temporary' children.
 -}
 newSimpleOneForOneSupervisor :: ActorHandler SupervisorMessage ()
 newSimpleOneForOneSupervisor = newSupervisor OneForOne def []
@@ -559,23 +546,22 @@ newSimpleOneForOneSupervisor = newSupervisor OneForOne def []
 {-|
     Create a supervisor.
 
-    When created supervisor IO action started, it automatically creates child threads based on given 'ProcessSpec'
-    list and supervise them.  After it created such static children, it listens given 'SupervisorQueue'.
-    User can let the supervisor creates dynamic child thread by calling 'newChild'.  Dynamic child threads
-    created by 'newChild' are also supervised.
+    When created supervisor IO action started, it automatically creates child threads based on given 'ProcessSpec' list
+    and supervise them.  After it created such static children, it listens given 'SupervisorQueue'.  User can let the
+    supervisor creates dynamic child thread by calling 'newChild'.  Dynamic child threads created by 'newChild' are also
+    supervised.
 
-    When the supervisor thread is killed or terminated in some reason, all children including static children
-    and dynamic children are all killed.
+    When the supervisor thread is killed or terminated in some reason, all children including static children and
+    dynamic children are all killed.
 
-    With 'OneForOne' restart strategy, when a child thread terminated, it is restarted based on its restart type
-    given in 'ProcessSpec'.  If the terminated thread has 'Permanent' restart type, supervisor restarts it
-    regardless its exit reason.  If the terminated thread has 'Transient' restart type, and termination reason
-    is other than 'Normal' (meaning 'UncaughtException' or 'Killed'), it is restarted.  If the terminated thread
-    has 'Temporary' restart type, supervisor does not restart it regardless its exit reason.
+    With 'OneForOne' restart strategy, when a child thread terminated, it is restarted based on its restart type given
+    in 'ProcessSpec'.  If the terminated thread has 'Permanent' restart type, supervisor restarts it regardless its exit
+    reason.  If the terminated thread has 'Transient' restart type, and termination reason is other than 'Normal'
+    (meaning 'UncaughtException' or 'Killed'), it is restarted.  If the terminated thread has 'Temporary' restart type,
+    supervisor does not restart it regardless its exit reason.
 
-    Created IO action is designed to run in separate thread from main thread.
-    If you try to run the IO action at main thread without having producer of the supervisor queue you gave,
-    the state machine will dead lock.
+    Created IO action is designed to run in separate thread from main thread.  If you try to run the IO action at main
+    thread without having producer of the supervisor queue you gave, the state machine will dead lock.
 -}
 newSupervisor
     :: Strategy             -- ^ Restarting strategy of monitored processes.  'OneForOne' or 'OneForAll'.
@@ -585,7 +571,7 @@ newSupervisor
 newSupervisor strategy restartSensitivity procSpecs inbox = bracket newProcessMap (killAllSupervisedProcess inbox) initSupervisor
   where
     initSupervisor procMap = do
-        startAllSupervisedProcess (MessageQueueTail inbox) procMap procSpecs
+        startAllSupervisedProcess (Actor inbox) procMap procSpecs
         newStateMachine (newIntenseRestartDetector restartSensitivity) handler inbox
       where
         handler :: IntenseRestartDetector -> SupervisorMessage -> IO (Either () IntenseRestartDetector)
@@ -611,12 +597,12 @@ newSupervisor strategy restartSensitivity procSpecs inbox = bracket newProcessMa
             restartNeeded _         _      = True
 
         handler hist (StartChild (ProcessSpec _ proc) cont) =
-            (newSupervisedProcess (MessageQueueTail inbox) procMap (ProcessSpec Temporary proc) >>= cont) $> Right hist
+            (newSupervisedProcess (Actor inbox) procMap (ProcessSpec Temporary proc) >>= cont) $> Right hist
 
-        restartChild OneForOne procMap spec = void $ newSupervisedProcess (MessageQueueTail inbox) procMap spec
+        restartChild OneForOne procMap spec = void $ newSupervisedProcess (Actor inbox) procMap spec
         restartChild OneForAll procMap _    = do
             killAllSupervisedProcess inbox procMap
-            startAllSupervisedProcess (MessageQueueTail inbox) procMap procSpecs
+            startAllSupervisedProcess (Actor inbox) procMap procSpecs
 
 -- | Ask the supervisor to spawn new temporary child process.  Returns 'Async' of the new child.
 newChild
