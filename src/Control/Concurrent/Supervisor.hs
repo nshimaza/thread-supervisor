@@ -18,9 +18,9 @@ module Control.Concurrent.Supervisor
           'Inbox' is specifically designed queue for implementing actor which is all behaviors available in this package
           depend on.  It provides following capabilities.
 
-          * Thread-safe read (pull/receive) and write (push/send) end.
-          * Blocking and non-blocking read (pull/receive) operation.
-          * Selective read (pull/receive) operation.
+          * Thread-safe read (pull, receive) and write (push, send) end.
+          * Blocking and non-blocking read (pull, receive) operation.
+          * Selective read (pull, receive) operation.
           * Current queue length.
           * Bounded queue.
 
