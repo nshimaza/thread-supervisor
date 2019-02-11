@@ -48,7 +48,7 @@ data Inbox a = Inbox
     , inboxSaveStack :: TVar [a]    -- ^ Saved massage by 'receiveSelect'.  It keeps messages
                                     --   not selected by receiveSelect in reversed order.
                                     --   Latest message is kept at head of the list.
-    , inboxMaxBound  :: Word        -- ^ Maximum length of the 'Inbox'
+    , inboxMaxBound  :: Word        -- ^ Maximum length of the 'Inbox'.
     }
 
 -- | Maximum length of 'Inbox'.
@@ -65,7 +65,10 @@ newInbox :: InboxLength -> IO (Inbox a)
 newInbox (InboxLength upperBound) = Inbox <$> newTQueueIO <*> newTVarIO 0 <*> newTVarIO [] <*> pure upperBound
 
 -- | Send a message to given 'Actor'.  Block while the queue is full.
-send :: Actor a -> a -> IO ()
+send
+  :: Actor a    -- ^ Write-end of target actor's message queue.
+  -> a          -- ^ Message to be sent.
+  -> IO ()
 send (Actor (Inbox inbox lenTVar _ limit)) msg = atomically $ do
     len <- readTVar lenTVar
     if len < limit
@@ -73,7 +76,10 @@ send (Actor (Inbox inbox lenTVar _ limit)) msg = atomically $ do
     else retrySTM
 
 -- | Try to send a message to given 'Actor'.  Return Nothing if the queue is already full.
-trySend :: Actor a -> a -> IO (Maybe ())
+trySend
+    :: Actor a  -- ^ Write-end of target actor's message queue.
+    -> a        -- ^ Message to be sent.
+    -> IO (Maybe ())
 trySend (Actor (Inbox inbox lenTVar _ limit)) msg = atomically $ do
     len <- readTVar lenTVar
     if len < limit

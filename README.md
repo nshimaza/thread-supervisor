@@ -196,8 +196,8 @@ This package consists of following building blocks.
 * Monitored IO action and supervisable process
 * Supervisor and underlying behaviors
 
-Actor and message queue is most lower layer block of this package.  Behaviors
-are built upon this block.  It is exposed to user so that you can use it for
+Actor and message queue is lowest layer block of this package.  Behaviors are
+built upon this block.  It is exposed to user so that you can use it for
 implementing actor style concurrent program.
 
 Monitored IO action is the heart of this package.  Most sensitive part for
@@ -211,6 +211,68 @@ from Erlang/OTP.
 
 
 ## Actor and Message queue
+
+Actor is message queue and its handler.  `Inbox` is a message queue designed for
+actor's message inbox.  It is thread-safe, bounded or unbounded, and selectively
+readable queue.
+
+To protect read-end of the queue, it has different type for read-end and
+write-end.  Message handler of actor can access to both end but only write-end
+is accessible from outside of message handler.  To realize this, constructor of
+`Inbox` is not exposed.  The only way to create a new `Inbox` object is creating
+a new actor using `newActor` function.
+
+```haskell
+newActor :: (Inbox a -> IO b) -> IO (Actor a, IO b)
+```
+
+`newActor` receives an user supplied message handler, creates a new `Inbox`
+value, then returns write-end of actor's message queue and IO action of the
+actor's body.  The `Actor a` in the returned value is the write-end of created
+`Inbox`.  While user supplied message handler receives `Inbox`, which is
+read-end of created queue, caller of `newActor` gets write-end only.
+
+### Read an oldest message from `Inbox`
+
+To read a message at the head of message queue, apply `receive` to `Inbox`.
+If one or more message is available, `receive` returns oldest one.  If no
+message is available, `receive` blocks until at least one message arrives.
+A skeleton of actor message handler will look like this.
+
+```haskell
+myActorHandler :: Inbox YourMessageType -> IO ()
+myActorHandler inbox = do
+    newMessage <- receive inbox
+    doSomethingWith newMessage
+    myActorHandler inbox
+```
+
+### Send a message to an actor
+
+To send a message to an actor, call `send` with write-end of the actor's inbox
+and the message.
+
+```haskell
+send :: Actor a -> a -> IO ()
+```
+
+`Actor` is write-end of actor's message queue.
+
+#### Send a message from an actor to itself
+
+You can convert `Inbox` (read-end) to `Actor` (write-end) by wrapping `Inbox` by
+`Actor` so that you can send a message from an actor to itself.
+
+```haskell
+myActorHandler :: Inbox YourMessageType -> IO ()
+myActorHandler inbox = do
+    newMessage <- receive inbox
+    doSomethingWith newMessage
+
+    send (Actor inbox) messageToMyself
+
+    myActorHandler inbox
+```
 
 
 
