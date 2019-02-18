@@ -380,12 +380,12 @@ Define a state machine message handler handling `myServerCommand`.
 
 ```haskell
 myServerHandler :: () -> MyServerCommand -> IO (Either () ())
-myServerHandler  RequestWithoutResponse1                = doSomething1 $> Right ()
-myServerHandler (RequestWithoutResponse2 arg1)          = doSomething2 arg1 $> Right ()
-myServerHandler (RequestWithoutResponse3 arg2 arg3)     = doSomething3 arg2 arg3 $> Right ()
-myServerHandler (RequestWithResponse1 cont1)            = (doSomething4 >>= cont1) $> Right ()
-myServerHandler (RequestWithResponse2 argX cont2)       = (doSomething5 argX >>= cont2) $> Right ()
-myServerHandler (RequestWithResponse3 argY argZ cont3)  = (doSomething6 argY argZ >>= cont3) $> Right ()
+myServerHandler _  RequestWithoutResponse1                  = doSomething1 $> Right ()
+myServerHandler _ (RequestWithoutResponse2 arg1)            = doSomething2 arg1 $> Right ()
+myServerHandler _ (RequestWithoutResponse3 arg2 arg3)       = doSomething3 arg2 arg3 $> Right ()
+myServerHandler _ (RequestWithResponse1 cont1)              = (doSomething4 >>= cont1) $> Right ()
+myServerHandler _ (RequestWithResponse2 argX cont2)         = (doSomething5 argX >>= cont2) $> Right ()
+myServerHandler _ (RequestWithResponse3 argY argZ cont3)    = (doSomething6 argY argZ >>= cont3) $> Right ()
 ```
 
 The core idea here is implementing request handler in CPS style.  If a request
