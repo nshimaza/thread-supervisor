@@ -278,9 +278,9 @@ instance Default CallTimeout where
     Send an synchronous request to a server and waits for a return value until timeout.
 -}
 call
-    :: CallTimeout              -- ^ Timeout.
-    -> Actor cmd                -- ^ Message queue of the target server.
-    -> ((a -> IO ()) -> cmd)    -- ^ Request to the server without callback supplied.
+    :: CallTimeout                  -- ^ Timeout.
+    -> Actor cmd                    -- ^ Message queue of the target server.
+    -> (ServerCallback a -> cmd)    -- ^ Request to the server without callback supplied.
     -> IO (Maybe a)
 call (CallTimeout usec) srv req = do
     rVar <- newEmptyTMVarIO
@@ -297,10 +297,10 @@ call (CallTimeout usec) srv req = do
     possibly indefinitely.
 -}
 callAsync
-    :: CallTimeout              -- ^ Timeout.
-    -> Actor cmd                -- ^ Message queue.
-    -> ((a -> IO ()) -> cmd)    -- ^ Request to the server without callback supplied.
-    -> (Maybe a -> IO b)        -- ^ callback to process return value of the call.  Nothing is given on timeout.
+    :: CallTimeout                  -- ^ Timeout.
+    -> Actor cmd                    -- ^ Message queue.
+    -> (ServerCallback a -> cmd)    -- ^ Request to the server without callback supplied.
+    -> (Maybe a -> IO b)            -- ^ callback to process return value of the call.  Nothing is given on timeout.
     -> IO (Async b)
 callAsync timeout srv req cont = async $ call timeout srv req >>= cont
 
@@ -308,8 +308,8 @@ callAsync timeout srv req cont = async $ call timeout srv req >>= cont
     Send an request to a server but ignore return value.
 -}
 callIgnore
-    :: Actor cmd                -- ^ Message queue of the target server.
-    -> ((a -> IO ()) -> cmd)    -- ^ Request to the server without callback supplied.
+    :: Actor cmd                    -- ^ Message queue of the target server.
+    -> (ServerCallback a -> cmd)    -- ^ Request to the server without callback supplied.
     -> IO ()
 callIgnore srv req = send srv $ req (\_ -> pure ())
 

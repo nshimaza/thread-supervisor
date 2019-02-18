@@ -209,12 +209,14 @@ Lastly supervisor and underlying behaviors implement simplified Erlang/OTP
 behaviors so that user can leverage best practice of concurrent programming
 from Erlang/OTP.
 
-
 ## Actor and Message queue
 
-Actor is message queue and its handler.  `Inbox` is a message queue designed for
-actor's message inbox.  It is thread-safe, bounded or unbounded, and selectively
-readable queue.
+Actor is restartable IO action with inbound message queue.  Actor is designed
+to allow supervisor restart the actor while other threads sending messages to
+the actor keep using the same write-end of the queue before and after restart.
+Actor consists of message queue and its handler.  `Inbox` is a message queue
+designed for actor's message inbox.  It is thread-safe, bounded or unbounded,
+and selectively readable queue.
 
 To protect read-end of the queue, it has different type for read-end and
 write-end.  Message handler of actor can access to both end but only write-end
@@ -224,6 +226,12 @@ a new actor using `newActor` function.
 
 ```haskell
 newActor :: (Inbox a -> IO b) -> IO (Actor a, IO b)
+```
+
+This package provides type synonym for message handler as below.
+
+```haskell
+type ActorHandler a b = (Inbox a -> IO b)
 ```
 
 `newActor` receives an user supplied message handler, creates a new `Inbox`
@@ -274,56 +282,189 @@ myActorHandler inbox = do
     myActorHandler inbox
 ```
 
+### How Actor works
+
+Actor is IO action which is restartable without replacing message queue.  When
+actor's IO action crashed and restarted, the new calculation of the IO action
+continue referring the same message queue.  Thus, threads sending messages to
+the actor can continue using the same write-end of the queue.
+
+
+## Monitored IO action and supervisable process
+
+
+
+## Supervisor and underlying behaviors
+
+This package provides supervisor, server, and state machine behavior from
+Erlang/OTP with slight modifications.
+
+All behaviors available in this package are defined as `ActorHandler` so that
+they can be easily supervised by converting them to actor using `newActor`.
+
+Server behavior is built upon state machine behavior.  Supervisor is built on
+top of server behavior.
+
+Details of supervisor and other behaviors are described the next section.
+
+# Behaviors
 
 
 ## Supervisor behavior
-TBD
 
-Implement your worker actor as a "process" which can be supervised.
+WIP
+
+Supervisor behavior provides Erlang/OTP like thread supervision with some
+simplification.  
 
 
 
 
 ## Server behavior
 
-WIP
+Server behavior provides ask pattern, or synchronous request-response style
+communication with actor.  Server behavior allows user to send a request to an
+actor then wait for response form the actor.  This package provides a framework
+for implementing such actor.
+
+Server behavior in this package is actually a set of helper functions and type
+synonym to help implementing ask pattern over actor.  User need to follow some
+of rules described below to utilize those helpers.
+
+### Definition of message to server
+
+First, user need to define a data type for message of user's server in following
+form.
+
+```haskell
+data myServerCommand
+    = RequestWithoutResponse1
+    | RequestWithoutResponse2 Arg1
+    | RequestWithoutResponse3 Arg2 Arg3
+    | RequestWithResponse1 (ServerCallback Result1)
+    | RequestWithResponse1 ArgX (ServerCallback Result2)
+    | RequestWithResponse2 ArgY ArgZ (ServerCallback Result3)
+```
+
+Define an ADT containing all requests.  If a request doesn't return response,
+define a value type for the request as usual element of sum type.  If a request
+returns response, put `(ServerCallback ResultType)` at the last argument of the
+constructor for the request where `ResultType` is type of returned value.
+
+`ServerCallback` is type synonym of a function type as following.
+
+```haskell
+type ServerCallback a = (a -> IO ())
+```
+
+So real definition of your `myServerCommand` is:
+
+```haskell
+data MyServerCommand
+    = RequestWithoutResponse1
+    | RequestWithoutResponse2 Arg1
+    | RequestWithoutResponse3 Arg2 Arg3
+    | RequestWithResponse1 (Result1 -> IO ())
+    | RequestWithResponse2 ArgX (Result2 -> IO ())
+    | RequestWithResponse3 ArgY ArgZ (Result3 -> IO ())
+```
+
+### Message handler
+
+Next, user need to define an actor handling the message.  In this example, we
+will use state machine behavior so that we can focus on core message handling
+part.  For simplicity, this example doesn't have internal state and it never
+finishes.
+
+Define a state machine message handler handling `myServerCommand`.  
+
+```haskell
+myServerHandler :: () -> MyServerCommand -> IO (Either () ())
+myServerHandler  RequestWithoutResponse1                = doSomething1 $> Right ()
+myServerHandler (RequestWithoutResponse2 arg1)          = doSomething2 arg1 $> Right ()
+myServerHandler (RequestWithoutResponse3 arg2 arg3)     = doSomething3 arg2 arg3 $> Right ()
+myServerHandler (RequestWithResponse1 cont1)            = (doSomething4 >>= cont1) $> Right ()
+myServerHandler (RequestWithResponse2 argX cont2)       = (doSomething5 argX >>= cont2) $> Right ()
+myServerHandler (RequestWithResponse3 argY argZ cont3)  = (doSomething6 argY argZ >>= cont3) $> Right ()
+```
+
+The core idea here is implementing request handler in CPS style.  If a request
+returns a response, the request message comes with callback function (a.k.a.
+continuation).  You can send back response for the request by calling the
+callback.
+
+### Requesting to server
+
+Function `call`, `callAsync`, and `callIgnore` are helper functions to
+implement request-response communication with server.  They install callback to
+message, send the message, returns response to caller.  They receive partially
+applied server message constructor, apply it to callback function, then send it
+to server.  The installed callback handles response from the server.  You can
+use `call` like following.
+
+```haskell
+    maybeResult1 <- call def myServerActor RequestWithResponse1
+    maybeResult2 <- call def myServerActor $ RequestWithResponse2 argX
+    maybeResult3 <- call def myServerActor $ RequestWithResponse3 argY argZ
+```
+
+When you send a request without response, use `cast`.
+
+```haskell
+    cast myServerActor RequestWithWithoutResponse1
+    cast myServerActor $ RequestWithWithoutResponse1 arg1
+    cast myServerActor $ RequestWithWithoutResponse1 arg2 arg3
+```
+
+When you send a request with response but ignore it, use `callIgnore`.
+
+```haskell
+    callIgnore myServerActor RequestWithResponse1
+    callIgnore myServerActor $ RequestWithResponse2 argX
+    callIgnore myServerActor $ RequestWithResponse3 argY argZ
+```
+
+Generally, ask pattern, or synchronous request-response communication is not
+recommended in actor model.  It is because synchronous request blocks entire
+actor until it receives response or timeout.  You can mitigate the situation
+by wrapping the synchronous call with `async`.  Use `callAsync` for such
+purpose.
+
 
 ## State Machine behavior
 
 State machine behavior is most essential behavior in this package.  It provides
 framework for creating IO action of finite state machine running on its own
-thread.  State machine has single inbound `MessageQueue`, its local state, and
-a user supplied message handler.  State machine is created with initial state
-value, waits for incoming message, passes received message and current state to
-user supplied handler, updates state returned from user supplied handler, stops
-or continue to listen message queue based on what the handler returned.
+thread.  State machine has single `Inbox`, its local state, and a user supplied
+message handler.  State machine is created with initial state value, waits for
+incoming message, passes received message and current state to user supplied
+handler, updates state returned from user supplied handler, stops or continue to
+listen message queue based on what the handler returned.
 
 To create a new state machine, prepare initial state of your state machine and
-define your message handler driving your state machine, create a `MessageQueue`,
-and call `newStateMachine` with the queue, initial state, and handler.
+define your message handler driving your state machine, apply `newStateMachine`
+to the initial state and handler.  You will get a `ActorHandler` so you can
+get an actor of the state machine by applying `newActor` to it.
 
 ```haskell
-    stateMachineQ <- newMessageQueue
-    newStateMachine stateMachineQ yourInitialState yourHandler
+    (queue, action) <-  newActor $ newStateMachine yourInitialState yourHandler
 ```
 
-The `newStateMachine` returns IO action which can run under its own thread.
-You can pass the IO action to low level `forkIO` or `async` but of course you
-can wrap it by newProcessSpec and let it run by Supervisor of this package.
-
-User supplied handler must have following type signature.
+The `newStateMachine` returns write-end of message queue for the state machine
+and IO action to run.  You can run the IO action by `forkIO` or `async`, or you
+can let supervisor run it.
 
 ```haskell
 handler :: (state -> message -> IO (Either result state))
 ```
 
-A message was sent to given queue, handler is called with current state and
-received message.  The handler must return either result or next state.  When
-`Left` (or result) is returned, the state machine stops and returned value of
-the IO action is `IO result`.  When `Right` (or state) is returned, the state
-machine updates current state with the returned state and wait for next incoming
+When a message is sent to state machine's queue, it is automatically received
+by state machine framework, then the handler is called with current state and
+the message.  The handler must eturn either result or next state.  When `Left`
+(or result) is returned, the state machine stops and returned value of the IO
+action is `IO result`.  When `Right` (or state) is returned, the state machine
+updates current state with the returned state and wait for next incoming
 message.
-
 
 
 # Design Considerations
