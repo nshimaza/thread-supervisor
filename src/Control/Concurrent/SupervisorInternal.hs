@@ -1,11 +1,11 @@
 {-|
 Module      : Control.Concurrent.SupervisorInternal
-Copyright   : (c) Naoto Shimazaki 2018
+Copyright   : (c) Naoto Shimazaki 2018,2019
 License     : MIT (see the file LICENSE)
 Maintainer  : https://github.com/nshimaza
 Stability   : experimental
 
-A simplified implementation of Erlang/OTP like supervisor over async.
+A simplified implementation of Erlang/OTP like supervisor over thread.
 This is internal module where all real implementations present.
 
 -}
@@ -17,21 +17,21 @@ import           Control.Monad       (void)
 import           Data.Default
 import           Data.Foldable       (foldl', for_, traverse_)
 import           Data.Functor        (($>))
-import           Data.Map.Strict     (Map, delete, elems, empty, insert, lookup)
+import           Data.Map.Strict     (Map, delete, empty, insert, keys, lookup)
 import           System.Clock        (Clock (Monotonic), TimeSpec (..),
                                       diffTimeSpec, getTime)
 import           UnliftIO            (Async, IORef, STM, SomeException, TMVar,
-                                      TQueue, TVar, async, asyncThreadId,
-                                      asyncWithUnmask, atomically, bracket,
-                                      cancel, catch, finally, mask_,
-                                      modifyIORef', modifyTVar',
-                                      newEmptyTMVarIO, newIORef, newTQueueIO,
-                                      newTVarIO, putTMVar, readIORef,
-                                      readTQueue, readTVar, readTVarIO,
-                                      retrySTM, takeTMVar, throwIO, timeout,
-                                      tryReadTQueue, uninterruptibleMask_,
-                                      writeIORef, writeTQueue, writeTVar)
-import           UnliftIO.Concurrent (ThreadId, myThreadId)
+                                      TQueue, TVar, async, atomically, bracket,
+                                      catch, finally, mask_, modifyIORef',
+                                      modifyTVar', newEmptyTMVarIO, newIORef,
+                                      newTQueueIO, newTVarIO, putTMVar,
+                                      readIORef, readTQueue, readTVar,
+                                      readTVarIO, retrySTM, takeTMVar, throwIO,
+                                      timeout, tryReadTQueue,
+                                      uninterruptibleMask_, writeIORef,
+                                      writeTQueue, writeTVar)
+import           UnliftIO.Concurrent (ThreadId, forkIOWithUnmask, killThread,
+                                      myThreadId)
 
 import           Data.DelayedQueue   (DelayedQueue, newEmptyDelayedQueue, pop,
                                       push)
@@ -335,7 +335,7 @@ type Monitor
 
 {-|
     'MonitoredAction' is type synonym of function with callback on termination installed.  Its type signature fits to
-    argument for 'asyncWithUnmask'.
+    argument for 'forkIOWithUnmask'.
 -}
 type MonitoredAction = (IO () -> IO ()) -> IO ()
 
@@ -397,7 +397,7 @@ addMonitor monitor (ProcessSpec restart monitoredAction) = ProcessSpec restart $
     'ProcessMap' is mutable variable which holds pool of living threads and 'ProcessSpec' of each thread.
     ProcessMap is used inside of supervisor only.
 -}
-type ProcessMap = IORef (Map ThreadId (Async (), ProcessSpec))
+type ProcessMap = IORef (Map ThreadId ProcessSpec)
 
 -- | Create an empty 'ProcessMap'
 newProcessMap :: IO ProcessMap
@@ -405,16 +405,16 @@ newProcessMap = newIORef empty
 
 {-|
     Start new thread based on given 'ProcessSpec', register the thread to given 'ProcessMap'
-    then returns 'Async' of the thread.
+    then returns 'ThreadId' of the thread.
 -}
 newProcess
     :: ProcessMap       -- ^ Map of current live processes where the new process is going to be added.
     -> ProcessSpec      -- ^ Specification of newly started process.
-    -> IO (Async ())    -- ^ 'Async' representing forked thread.
+    -> IO ThreadId      -- ^ Thread ID of forked thread.
 newProcess procMap procSpec@(ProcessSpec _ monitoredAction) = mask_ $ do
-    a <- asyncWithUnmask monitoredAction
-    modifyIORef' procMap $ insert (asyncThreadId a) (a, procSpec)
-    pure a
+    tid <- forkIOWithUnmask monitoredAction
+    modifyIORef' procMap $ insert tid procSpec
+    pure tid
 
 {-
     Restart intensity handling.
@@ -485,7 +485,7 @@ detectIntenseRestartNow detector = detectIntenseRestart detector <$> getCurrentT
 -- | 'SupervisorMessage' defines all message types supervisor can receive.
 data SupervisorMessage
     = Down ExitReason ThreadId                              -- ^ Notification of child thread termination.
-    | StartChild ProcessSpec (ServerCallback (Async ()))    -- ^ Command to start a new supervised thread.
+    | StartChild ProcessSpec (ServerCallback ThreadId)      -- ^ Command to start a new supervised thread.
 
 -- | Type synonym for write-end of supervisor's message queue.
 type SupervisorQueue = Actor SupervisorMessage
@@ -497,7 +497,7 @@ newSupervisedProcess
     :: SupervisorQueue  -- ^ Inbox message queue of the supervisor.
     -> ProcessMap       -- ^ Map of current live processes which the supervisor monitors.
     -> ProcessSpec      -- ^ Specification of the process to be started.
-    -> IO (Async ())
+    -> IO ThreadId
 newSupervisedProcess sv procMap procSpec =
     newProcess procMap $ addMonitor monitor procSpec
       where
@@ -515,7 +515,7 @@ startAllSupervisedProcess sv procMap = traverse_ $ newSupervisedProcess sv procM
 killAllSupervisedProcess :: SupervisorInbox -> ProcessMap -> IO ()
 killAllSupervisedProcess inbox procMap = uninterruptibleMask_ $ do
     pmap <- readIORef procMap
-    for_ (elems pmap) $ cancel . fst
+    for_ (keys pmap) killThread
 
     -- Because 'cancel' blocks until killed thread exited
     -- (in other word, it is synchronous operation),
@@ -582,7 +582,7 @@ newSupervisor strategy restartSensitivity procSpecs inbox = bracket newProcessMa
         handler :: IntenseRestartDetector -> SupervisorMessage -> IO (Either () IntenseRestartDetector)
         handler hist (Down reason tid) = do
             pmap <- readIORef procMap
-            processRestart $ snd <$> lookup tid pmap
+            processRestart $ lookup tid pmap
           where
             processRestart :: Maybe ProcessSpec -> IO (Either () IntenseRestartDetector)
             processRestart (Just procSpec@(ProcessSpec restart _)) = do
@@ -609,10 +609,10 @@ newSupervisor strategy restartSensitivity procSpecs inbox = bracket newProcessMa
             killAllSupervisedProcess inbox procMap
             startAllSupervisedProcess (Actor inbox) procMap procSpecs
 
--- | Ask the supervisor to spawn new temporary child process.  Returns 'Async' of the new child.
+-- | Ask the supervisor to spawn new temporary child process.  Returns 'ThreadId' of the new child.
 newChild
     :: CallTimeout      -- ^ Request timeout in microsecond.
     -> SupervisorQueue  -- ^ Inbox message queue of the supervisor to ask new process.
     -> ProcessSpec      -- ^ Supervised process specification to spawn.
-    -> IO (Maybe (Async ()))
+    -> IO (Maybe ThreadId)
 newChild timeout sv spec = call timeout sv $ StartChild spec

@@ -329,17 +329,19 @@ spec = do
         it "does not restart finished dynamic child regardless restart type" $ do
             (svQ, sv) <- newActor newSimpleOneForOneSupervisor
             withAsync sv $ \_ -> for_ [Permanent, Transient, Temporary] $ \restart -> do
-                mark <- newEmptyMVar
+                startMark <- newEmptyMVar
                 trigger <- newEmptyMVar
+                finishMark <- newEmptyMVar
                 Just a <- newChild def svQ $ newProcessSpec restart $ noWatch $ do
-                    putMVar mark ()
+                    putMVar startMark ()
                     readMVar trigger
+                    putMVar finishMark ()
                     pure ()
-                takeMVar mark
+                takeMVar startMark
                 putMVar trigger ()
-                wait a
+                takeMVar finishMark
                 threadDelay 1000
-                r <- isEmptyMVar mark
+                r <- isEmptyMVar startMark
                 r `shouldBe` True
 
         it "does not exit itself by massive child crash" $ do
@@ -347,8 +349,8 @@ spec = do
             withAsync sv $ \a -> do
                 blocker <- newEmptyMVar
                 for_ [1..10] $ \_ -> do
-                    Just a <- newChild def svQ $ newProcessSpec Permanent $ noWatch $ readMVar blocker $> ()
-                    cancel a
+                    Just tid <- newChild def svQ $ newProcessSpec Permanent $ noWatch $ readMVar blocker $> ()
+                    killThread tid
                 threadDelay 1000
                 r <- poll a
                 r `shouldSatisfy` isNothing

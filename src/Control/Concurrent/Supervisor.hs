@@ -2,12 +2,12 @@
 
 {-|
 Module      : Control.Concurrent.Supervisor
-Copyright   : (c) Naoto Shimazaki 2018
+Copyright   : (c) Naoto Shimazaki 2018,2019
 License     : MIT (see the file LICENSE)
 Maintainer  : https://github.com/nshimaza
 Stability   : experimental
 
-A simplified implementation of Erlang/OTP like supervisor over async and underlying behaviors.
+A simplified implementation of Erlang/OTP like supervisor over thread and underlying behaviors.
 
 -}
 
@@ -66,8 +66,8 @@ module Control.Concurrent.Supervisor
     -- ** Monitored action
     {-|
         This package provides facility for supervising IO actions.  With types and functions in this section, you can
-        run IO action its own thread (wrapped by 'UnliftIO.Async') and receive notification on its termination at
-        another thread with reason of termination.
+        run IO action with its own thread and receive notification on its termination at another thread with reason of
+        termination.
 
         Use 'UnliftIO.bracket' when you just need resource cleanup on thread termination.  Use this API when you need to
         watch termination of a thread from another thread.  Supervisor internally uses this API.
@@ -84,16 +84,17 @@ module Control.Concurrent.Supervisor
 
         > (IO () -> IO ()) -> IO ()
 
-        It is because 'MonitoredAction' will be invoked with 'UnliftIO.asyncWithUnmask'.  In order to ensure callback on
-        termination works in any timing, the callback must be installed under asynchronous exception masked.  At the
-        same time, in order to allow killing the tread from another thread, body IO action must be executed with
-        asynchronous exception allowed.  To satisfy both conditions, the IO action and callback must be called using
-        'UnliftIO.asyncWithUnmask'.  Typically it looks like following.
+        It is because 'MonitoredAction' will be invoked with 'UnliftIO.Concurrent.forkIOWithUnmask'.  In order to
+        ensure callback on termination works in any timing, the callback must be installed under asynchronous exception
+        masked.  At the same time, in order to allow killing the tread from another thread, body IO action must be
+        executed with asynchronous exception allowed.  To satisfy both conditions, the IO action and callback must be
+        called using 'UnliftIO.Concurrent.forkIOWithUnmask'.  Typically it looks like following.
 
-        > mask_ $ asyncWithUnmask $ \unmask -> unmask action `finally` callback
+        > mask_ $ forkIOWithUnmask $ \unmask -> unmask action `finally` callback
 
-        Type signature of 'MonitoredAction' fits to argument for 'UnliftIO.asyncWithUnmask'.  Functions defined in this
-        section help installing callback and converting type to fit to 'UnliftIO.asyncWithUnmask'.
+        Type signature of 'MonitoredAction' fits to argument for 'UnliftIO.Concurrent.forkIOWithUnmask'.  Functions
+        defined in this section help installing callback and converting type to fit to
+        'UnliftIO.Concurrent.forkIOWithUnmask'.
 
         Callback function installed with a helper function in this section receives 'ExitReason' so that user can
         determine why the tread is terminated.  To receive 'ExitReason' callback must have type signature 'Monitor'.

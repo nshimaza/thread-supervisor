@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-brightgreen.svg)](https://opensource.org/licenses/MIT)
 [![Build Status](https://travis-ci.org/nshimaza/async-supervisor.svg?branch=master)](https://travis-ci.org/nshimaza/async-supervisor)
 
-A simplified implementation of Erlang/OTP like supervisor over async.
+A simplified implementation of Erlang/OTP like supervisor over thread.
 
 # Overview
 
@@ -170,7 +170,7 @@ dynamic process.
     asyncSv <- async svAction
     -- Request to run your process under the supervisor
     let yourProcessSpec = newProcessSpec Temporary $ noWatch yourIOAction
-    maybeChildAsync <- newChild def svQ yourProcessSpec
+    maybeChildThreadId <- newChild def svQ yourProcessSpec
 ```
 
 The idiom `newActor $ newSimpleOneForOneSupervisor` returns `(svQ, svAction)`
