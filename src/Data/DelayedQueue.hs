@@ -1,3 +1,5 @@
+{-# LANGUAGE Strict #-}
+
 {-|
 Module      : Data.DelayedQueue
 Copyright   : (c) Naoto Shimazaki 2018

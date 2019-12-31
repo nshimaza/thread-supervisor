@@ -1,3 +1,5 @@
+{-# LANGUAGE Strict #-}
+
 {-|
 Module      : Control.Concurrent.SupervisorInternal
 Copyright   : (c) Naoto Shimazaki 2018,2019
