@@ -24,14 +24,14 @@ import           System.Clock        (Clock (Monotonic), TimeSpec (..),
                                       diffTimeSpec, getTime)
 import           UnliftIO            (Async, IORef, STM, SomeException, TMVar,
                                       TQueue, TVar, async, atomically, bracket,
-                                      catch, finally, mask_, modifyIORef',
-                                      modifyTVar', newEmptyTMVarIO, newIORef,
-                                      newTQueueIO, newTVarIO, putTMVar,
-                                      readIORef, readTQueue, readTVar,
-                                      readTVarIO, retrySTM, takeTMVar, throwIO,
-                                      timeout, tryReadTQueue,
-                                      uninterruptibleMask_, writeIORef,
-                                      writeTQueue, writeTVar)
+                                      catch, catchAny, finally, mask_,
+                                      modifyIORef', modifyTVar',
+                                      newEmptyTMVarIO, newIORef, newTQueueIO,
+                                      newTVarIO, putTMVar, readIORef,
+                                      readTQueue, readTVar, readTVarIO,
+                                      retrySTM, takeTMVar, throwIO, timeout,
+                                      tryReadTQueue, uninterruptibleMask_,
+                                      writeIORef, writeTQueue, writeTVar)
 import           UnliftIO.Concurrent (ThreadId, forkIOWithUnmask, killThread,
                                       myThreadId)
 
@@ -414,7 +414,7 @@ newProcess
     -> ProcessSpec      -- ^ Specification of newly started process.
     -> IO ThreadId      -- ^ Thread ID of forked thread.
 newProcess procMap procSpec@(ProcessSpec _ monitoredAction) = mask_ $ do
-    tid <- forkIOWithUnmask monitoredAction
+    tid <- forkIOWithUnmask $ \unmask -> monitoredAction unmask `catchAny` \_ -> pure ()
     modifyIORef' procMap $ insert tid procSpec
     pure tid
 
