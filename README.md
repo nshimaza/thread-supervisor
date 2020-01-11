@@ -1,7 +1,7 @@
-# async-supervisor
+# thread-supervisor
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-brightgreen.svg)](https://opensource.org/licenses/MIT)
-[![Build Status](https://travis-ci.org/nshimaza/async-supervisor.svg?branch=master)](https://travis-ci.org/nshimaza/async-supervisor)
+[![Build Status](https://travis-ci.org/nshimaza/thread-supervisor.svg?branch=master)](https://travis-ci.org/nshimaza/thread-supervisor)
 
 A simplified implementation of Erlang/OTP like supervisor over thread.
 
@@ -49,7 +49,7 @@ In short, `withAsync` addresses different problem than this package.
 * `withAsync`: Accessing multiple REST server concurrently then gather all
   responses with guarantee of cancellation of all the request on termination
   of calling thread.
-* `async-supervisor`: Implementing server where unknown number of independent
+* `thread-supervisor`: Implementing server where unknown number of independent
   concurrent requests with indeterministic lifecycle will arrive.
 
 A typical use case for this package is TCP server style use case.  In such use
@@ -81,10 +81,10 @@ So, what if you kick async action go and make recursive call form `inner` back
 to your loop?  It is a bad idea.  Because `withAsync` is a `bracket`, recursive
 call from `inner` makes non-tail-recurse call.
 
-In other words, the difference between `withAsync` and `async-supervisor` is
+In other words, the difference between `withAsync` and `thread-supervisor` is
 strategy of installing / un-installing cleanup handler.  `withAsync` installs
 cleanup handler on stack so it uninstalls handler based on its lexical scope.
-`async-supervisor` installs cleanup handler surrounding user supplied action so
+`thread-supervisor` installs cleanup handler surrounding user supplied action so
 it uninstalls handlers at actual dynamic thread termination.
 
 

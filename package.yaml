@@ -1,6 +1,6 @@
-name:                async-supervisor
+name:                thread-supervisor
 version:             0.0.1.0
-github:              "nshimaza/async-supervisor"
+github:              "nshimaza/thread-supervisor"
 license:             MIT
 author:              "Naoto Shimazaki"
 maintainer:          "Naoto.Shimazaki@gmail.com"
@@ -17,7 +17,7 @@ extra-source-files:
 # To avoid duplicated efforts in documentation and dealing with the
 # complications of embedding Haddock markup inside cabal files, it is
 # common to point users to the README.md file.
-description:         Please see the README on Github at <https://github.com/nshimaza/async-supervisor#readme>
+description:         Please see the README on Github at <https://github.com/nshimaza/thread-supervisor#readme>
 
 dependencies:
 - base >= 4.7 && < 5
@@ -31,7 +31,7 @@ library:
   - containers
 
 tests:
-  async-supervisor-test:
+  thread-supervisor-test:
     main:                Spec.hs
     source-dirs:         test
     ghc-options:
@@ -41,4 +41,4 @@ tests:
     dependencies:
     - hspec
     - QuickCheck
-    - async-supervisor
+    - thread-supervisor
