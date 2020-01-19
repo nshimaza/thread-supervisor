@@ -156,13 +156,11 @@ module Control.Concurrent.Supervisor
     , watch
     , nestWatch
     , noWatch
-    -- ** Process Specification
+    -- ** Child Specification
     , Restart (..)
-    , ProcessSpec
     , ChildSpec
     , newChildSpec
     , newMonitoredChildSpec
-    , newProcessSpec
     , addMonitor
     -- * Supervisor
     , RestartSensitivity (..)

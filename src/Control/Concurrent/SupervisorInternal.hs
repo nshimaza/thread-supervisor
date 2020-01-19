@@ -307,12 +307,14 @@ call (CallTimeout usec) srv req = do
     timeout usec . atomically . takeTMVar $ rVar
 
 {-|
-    Make an asynchronous call to a server and give result in CPS style.  The return value is delivered to given callback
-    function.  It also can fail by timeout.  It is useful to convert return value of 'call' to a message of calling
-    process asynchronously so that calling process can continue processing instead of blocking at 'call'.
+    Make an asynchronous call to a server and give result in CPS style.  The
+    return value is delivered to given callback function.  It also can fail by
+    timeout.  Calling thread can 'UnliftIO.wait' for a return value from the
+    callback.
 
-    Use this function with care because there is no guaranteed cancellation of background worker thread other than
-    timeout.  Giving infinite timeout (zero) to the 'CallTimeout' argument may cause the background thread left to run,
+    Use this function with care because there is no guaranteed cancellation of
+    background worker thread other than timeout.  Giving infinite timeout (zero)
+    to the 'CallTimeout' argument may cause the background thread left to run,
     possibly indefinitely.
 -}
 callAsync
@@ -323,9 +325,7 @@ callAsync
     -> IO (Async b)
 callAsync timeout srv req cont = async $ call timeout srv req >>= cont
 
-{-|
-    Send an request to a server but ignore return value.
--}
+-- | Send an request to a server but ignore return value.
 callIgnore
     :: Actor cmd                    -- ^ Message queue of the target server.
     -> (ServerCallback a -> cmd)    -- ^ Request to the server without callback supplied.
@@ -393,18 +393,11 @@ data Restart
     deriving (Eq, Show)
 
 {-|
-    'ProcessSpec' is representation of IO action which can be supervised by supervisor.  Supervisor can run the IO
-    action with separate thread, watch its termination and restart it based on restart type.
+    'ChildSpec' is representation of IO action which can be supervised by
+    supervisor.  Supervisor can run the IO action with separate thread, watch
+    its termination and restart it based on restart type.
 -}
 data ChildSpec = ChildSpec Restart MonitoredAction
-type ProcessSpec = ChildSpec
-
--- | Create a 'ProcessSpec'.
-newProcessSpec
-    :: Restart          -- ^ Restart type of resulting 'ProcessSpec'.  One of 'Permanent', 'Transient' or 'Temporary'.
-    -> MonitoredAction  -- ^ User supplied monitored IO action which the 'ProcessSpec' actually does.
-    -> ProcessSpec
-newProcessSpec = newMonitoredChildSpec
 
 -- | Create a 'ChildSpec' from 'MonitoredAction'.
 newMonitoredChildSpec
@@ -420,34 +413,30 @@ newChildSpec
     -> ChildSpec
 newChildSpec restart action = newMonitoredChildSpec restart $ noWatch action
 
--- | Add a 'Monitor' function to existing 'ProcessSpec'.
+-- | Add a 'Monitor' function to existing 'ChildSpec'.
 addMonitor
-    :: Monitor      -- ^ Callback function called when the IO action of the 'ProcessSpec' terminated.
-    -> ProcessSpec  -- ^ Existing 'ProcessSpec' where the 'Monitor' is going to be added.
-    -> ProcessSpec  -- ^ Newly created 'ProcessSpec' with the 'Monitor' added.
+    :: Monitor      -- ^ Callback function called when the IO action of the 'ChildSpec' terminated.
+    -> ChildSpec    -- ^ Existing 'ChildSpec' where the 'Monitor' is going to be added.
+    -> ChildSpec    -- ^ Newly created 'ChildSpec' with the 'Monitor' added.
 addMonitor monitor (ChildSpec restart monitoredAction) = ChildSpec restart $ nestWatch monitor monitoredAction
 
-{-|
-    'ProcessMap' is mutable variable which holds pool of living threads and 'ProcessSpec' of each thread.
-    ProcessMap is used inside of supervisor only.
--}
-type ProcessMap = IORef (Map ThreadId ProcessSpec)
+-- | 'ThreadMap' is mutable variable which holds pool of living threads and
+-- 'ChildSpec' of each thread.  ThreadMap is used inside of supervisor only.
+type ThreadMap = IORef (Map ThreadId ChildSpec)
 
--- | Create an empty 'ProcessMap'
-newProcessMap :: IO ProcessMap
-newProcessMap = newIORef empty
+-- | Create an empty 'ThreadMap'
+newThreadMap :: IO ThreadMap
+newThreadMap = newIORef empty
 
-{-|
-    Start new thread based on given 'ProcessSpec', register the thread to given 'ProcessMap'
-    then returns 'ThreadId' of the thread.
--}
-newProcess
-    :: ProcessMap       -- ^ Map of current live processes where the new process is going to be added.
-    -> ProcessSpec      -- ^ Specification of newly started process.
-    -> IO ThreadId      -- ^ Thread ID of forked thread.
-newProcess procMap procSpec@(ChildSpec _ monitoredAction) = mask_ $ do
+-- | Start new thread based on given 'ChildSpec', register the thread to given
+-- 'ThreadMap' then returns 'ThreadId' of the thread.
+newThread
+    :: ThreadMap    -- ^ Map of current live threads where the new thread is going to be added.
+    -> ChildSpec    -- ^ Specification of newly started thread.
+    -> IO ThreadId  -- ^ Thread ID of forked thread.
+newThread children childSpec@(ChildSpec _ monitoredAction) = mask_ $ do
     tid <- forkIOWithUnmask $ \unmask -> monitoredAction unmask `catchAny` \_ -> pure ()
-    modifyIORef' procMap $ insert tid procSpec
+    modifyIORef' children $ insert tid childSpec
     pure tid
 
 {-
@@ -518,8 +507,8 @@ detectIntenseRestartNow detector = detectIntenseRestart detector <$> getCurrentT
 
 -- | 'SupervisorMessage' defines all message types supervisor can receive.
 data SupervisorMessage
-    = Down ExitReason ThreadId                              -- ^ Notification of child thread termination.
-    | StartChild ProcessSpec (ServerCallback ThreadId)      -- ^ Command to start a new supervised thread.
+    = Down ExitReason ThreadId                          -- ^ Notification of child thread termination.
+    | StartChild ChildSpec (ServerCallback ThreadId)    -- ^ Command to start a new supervised thread.
 
 -- | Type synonym for write-end of supervisor's message queue.
 type SupervisorQueue = Actor SupervisorMessage
@@ -527,38 +516,39 @@ type SupervisorQueue = Actor SupervisorMessage
 type SupervisorInbox = Inbox SupervisorMessage
 
 -- | Start a new thread with supervision.
-newSupervisedProcess
+newSupervisedThread
     :: SupervisorQueue  -- ^ Inbox message queue of the supervisor.
-    -> ProcessMap       -- ^ Map of current live processes which the supervisor monitors.
-    -> ProcessSpec      -- ^ Specification of the process to be started.
+    -> ThreadMap        -- ^ Map of current live threads which the supervisor monitors.
+    -> ChildSpec        -- ^ Specification of the child thread to be started.
     -> IO ThreadId
-newSupervisedProcess sv procMap procSpec =
-    newProcess procMap $ addMonitor monitor procSpec
+newSupervisedThread sv children childSpec =
+    newThread children $ addMonitor monitor childSpec
       where
         monitor reason tid = cast sv (Down reason tid)
 
--- | Start all given 'ProcessSpec' on new thread each with supervision.
-startAllSupervisedProcess
+-- | Start all given 'ChildSpec' on new thread each with supervision.
+startAllSupervisedThread
     :: SupervisorQueue  -- ^ Inbox message queue of the supervisor.
-    -> ProcessMap       -- ^ Map of current live processes which the supervisor monitors.
-    -> [ProcessSpec]    -- ^ List of process specifications to be started.
+    -> ThreadMap        -- ^ Map of current live threads which the supervisor monitors.
+    -> [ChildSpec]      -- ^ List of child specifications to be started.
     -> IO ()
-startAllSupervisedProcess sv procMap = traverse_ $ newSupervisedProcess sv procMap
+startAllSupervisedThread sv children = traverse_ $ newSupervisedThread sv children
 
 -- | Kill all running threads supervised by the supervisor represented by 'SupervisorQueue'.
-killAllSupervisedProcess :: SupervisorInbox -> ProcessMap -> IO ()
-killAllSupervisedProcess inbox procMap = uninterruptibleMask_ $ do
-    pmap <- readIORef procMap
+killAllSupervisedThread :: SupervisorInbox -> ThreadMap -> IO ()
+killAllSupervisedThread inbox children = uninterruptibleMask_ $ do
+    pmap <- readIORef children
     for_ (keys pmap) killThread
 
-    -- Because 'cancel' blocks until killed thread exited
-    -- (in other word, it is synchronous operation),
-    -- we are sure we no longer have child process still alive.
-    -- So it is okay to just put an empty process map.
-    writeIORef procMap empty
+    -- Because 'cancel' blocks until killed thread exited (in other word, it is
+    -- synchronous operation), we are sure we no longer have any child thread
+    -- still alive.  So it is okay to just put an empty thread map.
+    writeIORef children empty
 
-    -- Inbox of the SV has unprosessed 'Down' massages for killed children.
-    -- Let's cleanup them.
+    -- Inbox of the SV potentially has unprocessed 'Down' massages for killed
+    -- children remaining but they are no longer needed to to be processed since
+    -- we already killed all children.  Let's cleanup but also keep messages
+    -- other than 'Down' in the inbox.
     tryReceiveSelect isDownMessage inbox >>= go
   where
     go Nothing  = pure ()
@@ -569,84 +559,88 @@ killAllSupervisedProcess inbox procMap = uninterruptibleMask_ $ do
 
 -- | Restart strategy of supervisor
 data Strategy
-    = OneForOne -- ^ Restart only exited process.
-    | OneForAll -- ^ Restart all process supervised by the same supervisor of exited process.
+    = OneForOne -- ^ Restart only exited thread.
+    | OneForAll -- ^ Restart all threads supervised by the same supervisor of exited thread.
 
 {-|
-    Create a supervisor with 'OneForOne' restart strategy and has no static 'ProcessSpec'.  When it started, it has no
-    child threads.  Only 'newChild' can add new thread supervised by the supervisor.  Thus the simple one-for-one
+    Create a supervisor with 'OneForOne' restart strategy and has no static
+    'ChildSpec'.  When it started, it has no child threads.  Only 'newChild' can
+    add new thread supervised by the supervisor.  Thus the simple one-for-one
     supervisor only manages dynamic and 'Temporary' children.
 -}
 newSimpleOneForOneSupervisor :: ActorHandler SupervisorMessage ()
 newSimpleOneForOneSupervisor = newSupervisor OneForOne def []
 
--- data Supervisor = Supervisor SupervisorQueue IntenseRestartDetector
-
 {-|
     Create a supervisor.
 
-    When created supervisor IO action started, it automatically creates child threads based on given 'ProcessSpec' list
-    and supervise them.  After it created such static children, it listens given 'SupervisorQueue'.  User can let the
-    supervisor creates dynamic child thread by calling 'newChild'.  Dynamic child threads created by 'newChild' are also
-    supervised.
+    When created supervisor IO action started, it automatically creates child
+    threads based on given 'ChildSpec' list and supervise them.  After it
+    created such static children, it listens given 'SupervisorQueue'.  User can
+    let the supervisor creates dynamic child thread by calling 'newChild'.
+    Dynamic child threads created by 'newChild' are also supervised.
 
-    When the supervisor thread is killed or terminated in some reason, all children including static children and
-    dynamic children are all killed.
+    When the supervisor thread is killed or terminated in some reason, all
+    children including static children and dynamic children are all killed.
 
-    With 'OneForOne' restart strategy, when a child thread terminated, it is restarted based on its restart type given
-    in 'ProcessSpec'.  If the terminated thread has 'Permanent' restart type, supervisor restarts it regardless its exit
-    reason.  If the terminated thread has 'Transient' restart type, and termination reason is other than 'Normal'
-    (meaning 'UncaughtException' or 'Killed'), it is restarted.  If the terminated thread has 'Temporary' restart type,
-    supervisor does not restart it regardless its exit reason.
+    With 'OneForOne' restart strategy, when a child thread terminated, it is
+    restarted based on its restart type given in 'ChildSpec'.  If the terminated
+    thread has 'Permanent' restart type, supervisor restarts it regardless its
+    exit reason.  If the terminated thread has 'Transient' restart type, and
+    termination reason is other than 'Normal' (meaning 'UncaughtException' or
+    'Killed'), it is restarted.  If the terminated thread has 'Temporary'
+    restart type, supervisor does not restart it regardless its exit reason.
 
-    Created IO action is designed to run in separate thread from main thread.  If you try to run the IO action at main
-    thread without having producer of the supervisor queue you gave, the state machine will dead lock.
+    Created IO action is designed to run in separate thread from main thread.
+    If you try to run the IO action at main thread without having producer of
+    the supervisor queue you gave, the supervisor will dead lock.
 -}
 newSupervisor
-    :: Strategy             -- ^ Restarting strategy of monitored processes.  'OneForOne' or 'OneForAll'.
+    :: Strategy             -- ^ Restarting strategy of monitored threads.  'OneForOne' or 'OneForAll'.
     -> RestartSensitivity   -- ^ Restart intensity sensitivity in restart count and period.
-    -> [ProcessSpec]        -- ^ List of supervised process specifications.
+    -> [ChildSpec]          -- ^ List of supervised child specifications.
     -> ActorHandler SupervisorMessage ()
-newSupervisor strategy restartSensitivity procSpecs inbox = bracket newProcessMap (killAllSupervisedProcess inbox) initSupervisor
+newSupervisor strategy restartSensitivity childSpecs inbox = bracket newThreadMap (killAllSupervisedThread inbox) initSupervisor
   where
-    initSupervisor procMap = do
-        startAllSupervisedProcess (Actor inbox) procMap procSpecs
+    initSupervisor children = do
+        startAllSupervisedThread (Actor inbox) children childSpecs
         newStateMachine (newIntenseRestartDetector restartSensitivity) handler inbox
       where
         handler :: IntenseRestartDetector -> SupervisorMessage -> IO (Either () IntenseRestartDetector)
         handler hist (Down reason tid) = do
-            pmap <- readIORef procMap
-            processRestart $ lookup tid pmap
+            pmap <- readIORef children
+            threadRestart $ lookup tid pmap
           where
-            processRestart :: Maybe ProcessSpec -> IO (Either () IntenseRestartDetector)
-            processRestart (Just procSpec@(ChildSpec restart _)) = do
-                modifyIORef' procMap $ delete tid
+            threadRestart :: Maybe ChildSpec -> IO (Either () IntenseRestartDetector)
+            threadRestart (Just childSpec@(ChildSpec restart _)) = do
+                modifyIORef' children $ delete tid
                 if restartNeeded restart reason
                 then do
                     (intense, nextHist) <- detectIntenseRestartNow hist
                     if intense
                     then pure $ Left ()
-                    else restartChild strategy procMap procSpec $> Right nextHist
+                    else restartChild strategy children childSpec $> Right nextHist
                 else
                     pure $ Right hist
-            processRestart Nothing = pure $ Right hist
+            threadRestart Nothing = pure $ Right hist
 
             restartNeeded Temporary _      = False
             restartNeeded Transient Normal = False
             restartNeeded _         _      = True
 
-        handler hist (StartChild (ChildSpec _ proc) cont) =
-            (newSupervisedProcess (Actor inbox) procMap (ChildSpec Temporary proc) >>= cont) $> Right hist
+        handler hist (StartChild (ChildSpec _ action) cont) =
+            (newSupervisedThread (Actor inbox) children (ChildSpec Temporary action) >>= cont) $> Right hist
 
-        restartChild OneForOne procMap spec = void $ newSupervisedProcess (Actor inbox) procMap spec
-        restartChild OneForAll procMap _    = do
-            killAllSupervisedProcess inbox procMap
-            startAllSupervisedProcess (Actor inbox) procMap procSpecs
+        restartChild OneForOne children spec = void $ newSupervisedThread (Actor inbox) children spec
+        restartChild OneForAll children _    = do
+            killAllSupervisedThread inbox children
+            startAllSupervisedThread (Actor inbox) children childSpecs
 
--- | Ask the supervisor to spawn new temporary child process.  Returns 'ThreadId' of the new child.
+-- | Ask the supervisor to spawn new temporary child thread.  Returns 'ThreadId'
+-- of the new child.
 newChild
     :: CallTimeout      -- ^ Request timeout in microsecond.
-    -> SupervisorQueue  -- ^ Inbox message queue of the supervisor to ask new process.
-    -> ProcessSpec      -- ^ Supervised process specification to spawn.
+    -> SupervisorQueue  -- ^ Inbox message queue of the supervisor to ask new thread.
+    -> ChildSpec        -- ^ Child specification of the thread to spawn.
     -> IO (Maybe ThreadId)
 newChild timeout sv spec = call timeout sv $ StartChild spec
