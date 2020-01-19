@@ -396,21 +396,36 @@ data Restart
     'ProcessSpec' is representation of IO action which can be supervised by supervisor.  Supervisor can run the IO
     action with separate thread, watch its termination and restart it based on restart type.
 -}
-data ProcessSpec = ProcessSpec Restart MonitoredAction
+data ChildSpec = ChildSpec Restart MonitoredAction
+type ProcessSpec = ChildSpec
 
 -- | Create a 'ProcessSpec'.
 newProcessSpec
     :: Restart          -- ^ Restart type of resulting 'ProcessSpec'.  One of 'Permanent', 'Transient' or 'Temporary'.
     -> MonitoredAction  -- ^ User supplied monitored IO action which the 'ProcessSpec' actually does.
     -> ProcessSpec
-newProcessSpec = ProcessSpec
+newProcessSpec = newMonitoredChildSpec
+
+-- | Create a 'ChildSpec' from 'MonitoredAction'.
+newMonitoredChildSpec
+    :: Restart          -- ^ Restart type of resulting 'ChildSpec'.  One of 'Permanent', 'Transient' or 'Temporary'.
+    -> MonitoredAction  -- ^ User supplied monitored IO action which the 'ChildSpec' actually does.
+    -> ChildSpec
+newMonitoredChildSpec = ChildSpec
+
+-- | Create a 'ChildSpec' from plain IO action.
+newChildSpec
+    :: Restart  -- ^ Restart type of resulting 'ChildSpec'.  One of 'Permanent', 'Transient' or 'Temporary'.
+    -> IO ()    -- ^ User IO action which the 'ChildSpec' actually does.
+    -> ChildSpec
+newChildSpec restart action = newMonitoredChildSpec restart $ noWatch action
 
 -- | Add a 'Monitor' function to existing 'ProcessSpec'.
 addMonitor
     :: Monitor      -- ^ Callback function called when the IO action of the 'ProcessSpec' terminated.
     -> ProcessSpec  -- ^ Existing 'ProcessSpec' where the 'Monitor' is going to be added.
     -> ProcessSpec  -- ^ Newly created 'ProcessSpec' with the 'Monitor' added.
-addMonitor monitor (ProcessSpec restart monitoredAction) = ProcessSpec restart $ nestWatch monitor monitoredAction
+addMonitor monitor (ChildSpec restart monitoredAction) = ChildSpec restart $ nestWatch monitor monitoredAction
 
 {-|
     'ProcessMap' is mutable variable which holds pool of living threads and 'ProcessSpec' of each thread.
@@ -430,7 +445,7 @@ newProcess
     :: ProcessMap       -- ^ Map of current live processes where the new process is going to be added.
     -> ProcessSpec      -- ^ Specification of newly started process.
     -> IO ThreadId      -- ^ Thread ID of forked thread.
-newProcess procMap procSpec@(ProcessSpec _ monitoredAction) = mask_ $ do
+newProcess procMap procSpec@(ChildSpec _ monitoredAction) = mask_ $ do
     tid <- forkIOWithUnmask $ \unmask -> monitoredAction unmask `catchAny` \_ -> pure ()
     modifyIORef' procMap $ insert tid procSpec
     pure tid
@@ -604,7 +619,7 @@ newSupervisor strategy restartSensitivity procSpecs inbox = bracket newProcessMa
             processRestart $ lookup tid pmap
           where
             processRestart :: Maybe ProcessSpec -> IO (Either () IntenseRestartDetector)
-            processRestart (Just procSpec@(ProcessSpec restart _)) = do
+            processRestart (Just procSpec@(ChildSpec restart _)) = do
                 modifyIORef' procMap $ delete tid
                 if restartNeeded restart reason
                 then do
@@ -620,8 +635,8 @@ newSupervisor strategy restartSensitivity procSpecs inbox = bracket newProcessMa
             restartNeeded Transient Normal = False
             restartNeeded _         _      = True
 
-        handler hist (StartChild (ProcessSpec _ proc) cont) =
-            (newSupervisedProcess (Actor inbox) procMap (ProcessSpec Temporary proc) >>= cont) $> Right hist
+        handler hist (StartChild (ChildSpec _ proc) cont) =
+            (newSupervisedProcess (Actor inbox) procMap (ChildSpec Temporary proc) >>= cont) $> Right hist
 
         restartChild OneForOne procMap spec = void $ newSupervisedProcess (Actor inbox) procMap spec
         restartChild OneForAll procMap _    = do

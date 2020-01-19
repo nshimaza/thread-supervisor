@@ -159,6 +159,9 @@ module Control.Concurrent.Supervisor
     -- ** Process Specification
     , Restart (..)
     , ProcessSpec
+    , ChildSpec
+    , newChildSpec
+    , newMonitoredChildSpec
     , newProcessSpec
     , addMonitor
     -- * Supervisor
