@@ -2,20 +2,24 @@
 
 {-|
 Module      : Data.DelayedQueue
-Copyright   : (c) Naoto Shimazaki 2018
+Copyright   : (c) Naoto Shimazaki 2018-2020
 License     : MIT (see the file LICENSE)
 Maintainer  : https://github.com/nshimaza
 Stability   : experimental
 
 Queue with delay before elements become available to dequeue.
 
-'DelayedQueue' is a FIFO but it doesn't make element available to pop immediately after the element was pushed.
-'DelayedQueue' looks like empty until its delay-buffer is filled by pushed elements.  When a value is pushed to
-a 'DelayedQueue' with delay-buffer fully filled, the oldest element becomes available to dequeue.
+'DelayedQueue' is a FIFO but it does NOT make element available to pop
+immediately after the element was pushed.  DelayedQueue looks like empty until
+its delay-buffer is filled up by pushed elements.  When a value is pushed to a
+DelayedQueue where delay-buffer of the queue is already full-filled, the oldest
+element becomes available to dequeue.
 
-Elements within entire queue are always inlined in enqueued order but only older elements overflowed from
-delay-buffer are available to dequeue.  If delay-buffer is not yet filled, no element is available to dequeue.
-Once delay-buffer is filled, delay-buffer always keeps given number of newest elements.
+Entire elements within DelayedQueue are always inlined in enqueued order.  Only
+older elements overflowed from delay-buffer are available to dequeue.  If
+delay-buffer is not yet filled, no element is available to dequeue.  Once
+delay-buffer is filled, delay-buffer always keeps given number of newest
+elements.
 -}
 
 module Data.DelayedQueue

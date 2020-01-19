@@ -4,7 +4,7 @@ github:              "nshimaza/thread-supervisor"
 license:             MIT
 author:              "Naoto Shimazaki"
 maintainer:          "Naoto.Shimazaki@gmail.com"
-copyright:           "2018,2019 Naoto Shimazaki"
+copyright:           "2018-2020 Naoto Shimazaki"
 
 extra-source-files:
 - README.md

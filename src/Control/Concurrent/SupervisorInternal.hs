@@ -2,7 +2,7 @@
 
 {-|
 Module      : Control.Concurrent.SupervisorInternal
-Copyright   : (c) Naoto Shimazaki 2018,2019
+Copyright   : (c) Naoto Shimazaki 2018-2020
 License     : MIT (see the file LICENSE)
 Maintainer  : https://github.com/nshimaza
 Stability   : experimental
@@ -77,7 +77,8 @@ send (Actor (Inbox inbox lenTVar _ limit)) msg = atomically $ do
     then modifyTVar' lenTVar succ *> writeTQueue inbox msg
     else retrySTM
 
--- | Try to send a message to given 'Actor'.  Return Nothing if the queue is already full.
+-- | Try to send a message to given 'Actor'.  Return Nothing if the queue is
+-- already full.
 trySend
     :: Actor a  -- ^ Write-end of target actor's message queue.
     -> a        -- ^ Message to be sent.
@@ -89,31 +90,36 @@ trySend (Actor (Inbox inbox lenTVar _ limit)) msg = atomically $ do
     else pure Nothing
 
 -- | Number of elements currently held by the 'Actor'.
-length:: Actor a -> IO Word
+length :: Actor a -> IO Word
 length (Actor q) = readTVarIO $ inboxLength q
 
 {-|
     Perform selective receive from given 'Inbox'.
 
-    'receiveSelect' searches given queue for first interesting message predicated by user supplied function.  It applies
-    the predicate to the queue, returns the first element that satisfy the predicate and mutates the Inbox by removing
-    the element found.
+    'receiveSelect' searches given queue for first interesting message
+    predicated by user supplied function.  It applies the predicate to the
+    queue, returns the first element that satisfy the predicate, and remove the
+    element from the Inbox.
 
-    It blocks until interesting message arrived if no interesting message was found in the queue.
+    It blocks until interesting message arrived if no interesting message was
+    found in the queue.
 
     __Caution__
 
-    Use this function with care.  It doesn't discard any message unsatisfying predicate but keep them in the queue for
-    future receive and the function itself blocks until interesting message arrived.  That causes your queue filled up
-    by non-interesting messages.  There is no escape hatch.
+    Use this function with care.  It does NOT discard any message unsatisfying
+    predicate.  It keeps them in the queue for future receive and the function
+    itself blocks until interesting message arrived.  That causes your queue
+    filled up by non-interesting messages.  There is no escape hatch.
 
     Consider using 'tryReceiveSelect' instead.
 
     __Caveat__
 
-    Current implementation has performance caveat.  It has /O(n)/ performance characteristic where /n/ is number of
-    messages existing before your interested message appears.  It is because this function performs liner scan from the
-    top of the queue every time it is called.  It doesn't cache predicates and results you have given before.
+    Current implementation has performance caveat.  It has /O(n)/ performance
+    characteristic where /n/ is number of messages existing before your
+    interested message appears.  It is because this function performs liner scan
+    from the top of the queue every time it is called.  It doesn't cache pair of
+    predicates and results you have given before.
 
     Use this function in limited situation only.
 -}
@@ -136,17 +142,20 @@ receiveSelect predicate (Inbox inbox lenTVar saveStack _) = atomically $ do
 {-|
     Try to perform selective receive from given 'Inbox'.
 
-    'tryReceiveSelect' searches given queue for first interesting message predicated by user supplied function.  It
-    applies the predicate to the queue, returns the first element that satisfy the predicate and mutates the Inbox by
-    removing the element found.
+    'tryReceiveSelect' searches given queue for first interesting message
+    predicated by user supplied function.  It applies the predicate to the
+    queue, returns the first element that satisfy the predicate, and remove the
+    element from the Inbox.
 
     It return Nothing if there is no interesting message found in the queue.
 
     __Caveat__
 
-    Current implementation has performance caveat.  It has /O(n)/ performance characteristic where /n/ is number of
-    messages existing before your interested message appears.  It is because this function performs liner scan from the
-    top of the queue every time it is called.  It doesn't cache predicates and results you have given before.
+    Current implementation has performance caveat.  It has /O(n)/ performance
+    characteristic where /n/ is number of messages existing before your
+    interested message appears.  It is because this function performs liner scan
+    from the top of the queue every time it is called.  It doesn't cache pair of
+    predicates and results you have given before.
 
     Use this function in limited situation only.
 -}
@@ -168,8 +177,9 @@ tryReceiveSelect predicate (Inbox inbox lenTVar saveStack _) = atomically $ do
                      | otherwise        -> go (msg:newSaved)
 
 {-|
-    Removes oldest message satisfying predicate from 'saveStack' and return the message and updated saveStack.  Returns
-    'Nothing' if there is no satisfying message.
+    Find oldest message satisfying predicate from 'saveStack', return the
+    message, and remove it from the saveStack.  Returns 'Nothing' if there is no
+    satisfying message.
 -}
 pickFromSaveStack :: (a -> Bool) -> [a] -> Maybe (a, [a])
 pickFromSaveStack predicate saveStack = go [] $ reverse saveStack
@@ -178,11 +188,11 @@ pickFromSaveStack predicate saveStack = go [] $ reverse saveStack
     go newSaved (x:xs) | predicate x  = Just (x, foldl' (flip (:)) newSaved xs)
                        | otherwise    = go (x:newSaved) xs
 
--- | Mutate 'Inbox' when a message was removed from it.
+-- | Update 'Inbox' with new 'saveStack' which already have one message removed.
 oneMessageRemoved
     :: TVar Word    -- ^ 'TVar' holding current number of messages in the queue.
-    -> TVar [a]     -- ^ 'IORef' to saveStack to be overwritten.
-    -> [a]          -- ^ New saveStack to mutate given IORef
+    -> TVar [a]     -- ^ TVar to hold given new saveStack.
+    -> [a]          -- ^ New saveStack to update given TVar.
     -> STM ()
 oneMessageRemoved len saveStack newSaved = do
     modifyTVar' len pred
@@ -192,25 +202,32 @@ oneMessageRemoved len saveStack newSaved = do
 receive :: Inbox a -> IO a
 receive = receiveSelect (const True)
 
--- | Try to receive first message in 'Inbox'.  It returns Nothing if there is no message available.
+-- | Try to receive first message in 'Inbox'.  It returns Nothing if there is no
+-- message available.
 tryReceive :: Inbox a -> IO (Maybe a)
 tryReceive = tryReceiveSelect (const True)
 
--- | Type synonym of user supplied message handler inside actor.
+-- | Type synonym of user supplied message handler working inside actor.
 type ActorHandler a b = (Inbox a -> IO b)
 
 {-|
     Create a new actor.
 
-    User have to supply a message handler function with 'ActorHandler' type.  It accepts a 'Inbox' and returns anything.
+    Users have to supply a message handler function with 'ActorHandler' type.
+    ActorHandler accepts a 'Inbox' and returns anything.
 
-    'newActor' creates a new 'Inbox', apply user supplied message handler to the queue, returns reference to write-end
-    of the queue and IO action of the actor.  Because 'newActor' only returns 'Actor', caller of 'newActor' can only
-    send messages to created actor but caller cannot receive message from the queue.
+    'newActor' creates a new 'Inbox', apply user supplied message handler to the
+    queue, returns reference to write-end of the queue and IO action of the
+    actor.  Because 'newActor' only returns 'Actor', caller of 'newActor' can
+    only send messages to created actor.  Caller cannot receive message from the
+    queue.
 
-    'Inbox', or read-end of the queue, is passed to user supplied message handler so the handler can receive message to
-    the actor.  If the handler need to send a message to itself, wrap the message queue by 'Actor' constructor then use
-    'send' over created 'Actor'.
+    'Inbox', or read-end of the queue, is passed to user supplied message
+    handler so the handler can receive message to the actor.  If the handler
+    need to send a message to itself, wrap the message queue by 'Actor'
+    constructor then use 'send' over created 'Actor'.  Here is an example.
+
+    > send (Actor yourInbox) message
 -}
 newActor
     :: ActorHandler a b     -- ^ IO action handling received messages.
@@ -336,8 +353,8 @@ type Monitor
     -> IO ()
 
 {-|
-    'MonitoredAction' is type synonym of function with callback on termination installed.  Its type signature fits to
-    argument for 'forkIOWithUnmask'.
+    'MonitoredAction' is type synonym of function with callback on termination
+    installed.  Its type signature fits to argument for 'forkIOWithUnmask'.
 -}
 type MonitoredAction = (IO () -> IO ()) -> IO ()
 

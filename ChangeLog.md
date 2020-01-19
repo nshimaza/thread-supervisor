@@ -1,3 +1,3 @@
-# Changelog for async-supervisor
+# Changelog for thread-supervisor
 
 ## Unreleased changes
