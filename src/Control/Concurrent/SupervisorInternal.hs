@@ -208,7 +208,7 @@ tryReceive :: Inbox a -> IO (Maybe a)
 tryReceive = tryReceiveSelect (const True)
 
 -- | Type synonym of user supplied message handler working inside actor.
-type ActorHandler a b = (Inbox a -> IO b)
+type ActorHandler message result = (Inbox message -> IO result)
 
 {-|
     Create a new actor.
@@ -230,17 +230,17 @@ type ActorHandler a b = (Inbox a -> IO b)
     > send (Actor yourInbox) message
 -}
 newActor
-    :: ActorHandler a b     -- ^ IO action handling received messages.
-    -> IO (Actor a, IO b)
+    :: ActorHandler message result  -- ^ IO action handling received messages.
+    -> IO (Actor message, IO result)
 newActor = newBoundedActor def
 
 {-|
     Create a new actor with bounded inbox queue.
 -}
 newBoundedActor
-    :: InboxLength          -- ^ Maximum length of inbox message queue.
-    -> ActorHandler a b     -- ^ IO action handling received messages.
-    -> IO (Actor a, IO b)
+    :: InboxLength                  -- ^ Maximum length of inbox message queue.
+    -> ActorHandler message result  -- ^ IO action handling received messages.
+    -> IO (Actor message, IO result)
 newBoundedActor maxQLen handler = do
     q <- newInbox maxQLen
     pure (Actor q, handler q)
@@ -251,15 +251,19 @@ newBoundedActor maxQLen handler = do
 {-|
     Create a new finite state machine.
 
-    The state machine waits for new message at 'Inbox' then callback message handler given by user.  The message handler
-    must return 'Right' with new state or 'Left' with final result.  When 'Right' is returned, the state machine waits
-    next message.  When 'Left' is returned, the state machine terminates and returns the result.
+    The state machine waits for new message at 'Inbox' then callback user
+    supplied message handler.  The message handler must return 'Right' with new
+    state or 'Left' with final result.  When 'Right' is returned, the state
+    machine waits for next message.  When 'Left' is returned, the state machine
+    terminates and returns the result.
 
-    'newStateMachine' returns an IO action wrapping the state machine described above.  The returned IO action can be
-    executed within an 'Async' or bare thread.
+    'newStateMachine' returns an IO action wrapping the state machine described
+    above.  The returned IO action can be executed within an 'Async' or bare
+    thread.
 
-    Created IO action is designed to run in separate thread from main thread.  If you try to run the IO action at main
-    thread without having producer of the message queue you gave, the state machine will dead lock.
+    Created IO action is designed to run in separate thread from main thread.
+    If you try to run the IO action at main thread without having producer of
+    the message queue you gave, the state machine will dead lock.
 -}
 newStateMachine
     :: state    -- ^ Initial state of the state machine.
@@ -271,6 +275,11 @@ newStateMachine initialState messageHandler inbox = go $ Right initialState
     go (Right state) = receive inbox >>= messageHandler state >>= go
     go (Left result) = pure result
 
+-- | create an unbound actor of newStateMachine.  Short-cut of following.
+--
+-- > newActor $ newStateMachine initialState messageHandler
+newStateMachineActor :: state -> (state -> message -> IO (Either result state)) -> IO (Actor message, IO result)
+newStateMachineActor initialState = newActor . newStateMachine initialState
 
 {-
     Sever behavior
@@ -380,11 +389,14 @@ nestWatch monitor monitoredAction unmask = do
             _                   -> pure ()
 
 {-|
-    'Restart' defines when terminated child thread triggers restart operation by its supervisor.  'Restart' only
-    defines when it triggers restart operation.  It does not directly means if the thread will be or will not be
-    restarted.  It is determined by restart strategy of supervisor.  For example, a static 'Temporary' thread never
-    triggers restart on its termination but static 'Temporary' thread will be restarted if another 'Permanent' or
-    'Transient' thread with common supervisor triggered restart operation and the supervisor has 'OneForAll' strategy.
+    'Restart' defines when terminated child thread triggers restart operation by
+    its supervisor.  'Restart' only defines when it triggers restart operation.
+    It does not directly means if the thread will be or will not be restarted.
+    It is determined by restart strategy of supervisor.  For example, a static
+    'Temporary' child never triggers restart on its termination but static
+    'Temporary' child will be restarted if another 'Permanent' or 'Transient'
+    thread with common supervisor triggered restart operation and the supervisor
+    has 'OneForAll' strategy.
 -}
 data Restart
     = Permanent -- ^ 'Permanent' thread always triggers restart.
@@ -409,7 +421,7 @@ newMonitoredChildSpec = ChildSpec
 -- | Create a 'ChildSpec' from plain IO action.
 newChildSpec
     :: Restart  -- ^ Restart type of resulting 'ChildSpec'.  One of 'Permanent', 'Transient' or 'Temporary'.
-    -> IO ()    -- ^ User IO action which the 'ChildSpec' actually does.
+    -> IO ()    -- ^ User supplied IO action which the 'ChildSpec' actually does.
     -> ChildSpec
 newChildSpec restart action = newMonitoredChildSpec restart $ noWatch action
 

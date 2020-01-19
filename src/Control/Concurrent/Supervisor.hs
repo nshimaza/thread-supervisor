@@ -174,9 +174,49 @@ module Control.Concurrent.Supervisor
     , newSimpleOneForOneSupervisor
     , newChild
     -- * State machine
+    {-|
+        State machine behavior is most essential behavior in this package.  It
+        provides framework for creating IO action of finite state machine
+        running on its own thread.  State machine has single 'Inbox', its local
+        state, and a user supplied message handler.  State machine is created
+        with initial state value, waits for incoming message, passes received
+        message and current state to user supplied handler, updates state
+        returned from user supplied handler, stops or continue to listen message
+        queue based on what the handler returned.
+
+        To create a new state machine, prepare initial state of your state
+        machine and define your message handler driving your state machine,
+        apply 'newStateMachine' to the initial state and handler.  You will get
+        a 'ActorHandler' so you can get an actor of the state machine by
+        applying 'newActor' to it.
+
+        > (queue, action) <-  newActor $ newStateMachine initialState handler
+
+        Or you can use short-cut helper.
+
+        > (queue, action) <-  newStateMachineActor initialState handler
+
+        The 'newStateMachine' returns write-end of message queue for the state
+        machine and IO action to run.  You can run the IO action by
+        'Control.Concurrent.forkIO' or 'Control.Concurrent.async', or you can
+        let supervisor run it.
+
+        User supplied message handler must have following type signature.
+
+        > handler :: (state -> message -> IO (Either result state))
+
+        When a message is sent to state machine's queue, it is automatically
+        received by state machine framework, then the handler is called with
+        current state and the message.  The handler must return either result or
+        next state.  When 'Left' (or result) is returned, the state machine
+        stops and returned value of the IO action is @IO result@.  When 'Right'
+        (or state) is returned, the state machine updates current state with the
+        returned state and wait for next incoming message.
+    -}
     , newStateMachine
-    , CallTimeout (..)
+    , newStateMachineActor
     -- * Simple server behavior
+    , CallTimeout (..)
     , ServerCallback
     , cast
     , call

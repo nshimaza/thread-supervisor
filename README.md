@@ -94,39 +94,43 @@ it uninstalls handlers at actual dynamic thread termination.
 ## High level steps to use
 
 1. Create a `MonitoredAction` from your IO action
-1. Create a `ProcessSpec` from the `MonitoredAction`
-1. Let a supervisor run the `ProcessSpec` in a supervised thread
+1. Create a `ChildSpec` from the `MonitoredAction`
+1. Let a supervisor run the `ChildSpec` in a supervised thread
 
-Detail will be different whether you create static process or dynamic process.
+Detail will be different whether you create static child thread or dynamic child
+thread.
 
-## Create a static process
+## Create a static child
 
-Static process is thread automatically forked when supervisor starts.
-Following procedure makes your IO action a static process.
+Static child is thread automatically spawned when supervisor starts.  Following
+procedure makes your IO action a static child.
 
 1. Create a `MonitoredAction` from your IO action
-1. Create a `ProcessSpec` from the `MonitoredAction`
-1. Give the `ProcessSpec` to `newSupervisor`
+1. Create a `ChildSpec` from the `MonitoredAction`
+1. Give the `ChildSpec` to `newSupervisor`
 1. Run generated supervisor
 
-Static processes are automatically forked to each thread when supervisor started
-or one-for-all supervisor performed restarting action. When IO action inside of
-static process terminated, regardless normal completion or exception, supervisor
-takes restart action based on restart type of terminated static process.
+Static children are automatically forked when supervisor started or one-for-all
+supervisor performed restarting action. When IO action inside of static child
+terminated, regardless normal completion or exception, supervisor checks if
+restart operation needed based on combination of restart type of terminated
+child and reason of termination.  If supervisor decides restart is needed, it
+performs restarting operation based on its restart strategy, which can be
+one-for-one or one-for-all.
 
-A supervisor can have any number of static processes.  Static processes must be
+A supervisor can have any number of static children.  Static children must be
 given when supervisor is created by `newSupervisor`.
 
-## Static process example
+## Static child example
 
-Following code creates a supervisor actor with two static processes and run it
-in new thread.
+Following code creates a supervisor actor with two static children and run it in
+new thread.
 
 ```haskell
-runYourSupervisorWithStaticProcess = do
+runYourSupervisorWithStaticChildren = do
     (svQ, svAction) <- newActor . newSupervisor $ OneForAll def
-        [ newProcessSpec Permanent $ noWatch yourIOAction1
-        , newProcessSpec Permanent $ noWatch yourIOAction2
+        [ newChildSpec Permanent yourIOAction1
+        , newChildSpec Permanent yourIOAction2
         ]
     async svAction
 ```
@@ -136,53 +140,54 @@ write-end of message queue for the supervisor actor, which we don't use here,
 and `svAction` is body IO action of the supervisor.  When the `svAction` is
 actually evaluated, it automatically forks two threads.  One is for
 `yourIOAction1` and the other is for `yourIOAction2`.  Because restart type of
-given static processes are both `Permanent`, the supervisor always kicks
-restarting action when one of `yourIOAction1` or `yourIOAction2` is terminated.
-When restarting action is kicked, the supervisor kills remaining thread and
-restarts all processes again because its restarting strategy is one-for-all.
+given static children are both `Permanent`, the supervisor always kicks
+restarting operation when one of `yourIOAction1` or `yourIOAction2` is
+terminated.  When restarting operation is kicked, the supervisor kills remaining
+thread and restarts all children again because its restarting strategy is
+one-for-all.
 
 When the supervisor is terminated, both `yourIOAction1` and `yourIOAction2` are
 automatically killed by the supervisor.  To kill the supervisor, apply `cancel`
 to the async object returned by `async svAction`.
 
-## Create a dynamic process
+## Create a dynamic child
 
-Dynamic process is thread explicitly forked via `newChild` function.
-Following procedure runs your IO action as a dynamic process.
+Dynamic child is thread explicitly forked via `newChild` function.  Following
+procedure runs your IO action as a dynamic child.
 
 1. Run a supervisor
-1. Create a `ProcessSpec` from your IO action
-1. Request the supervisor to create a dynamic process based on the `ProcessSpec`
-   by calling `newChild`
+1. Create a `ChildSpec` from your IO action
+1. Request the supervisor to create a dynamic child based on the `ChildSpec` by
+   calling `newChild`
 
-Dynamic processes are explicitly forked to each thread via `newChild` request to
-running supervisor.  Supervisor never restarts dynamic process.  It ignores
-restart type defined in `ProcessSpec` of dynamic process.
+Dynamic children are explicitly forked to each thread via `newChild` request to
+running supervisor.  Supervisor never restarts dynamic child.  It ignores
+restart type defined in `ChildSpec` of dynamic child.
 
-## Dynamic process example
+## Dynamic child example
 
 Following code runs a supervisor in different thread then request it to run a
-dynamic process.
+dynamic child.
 
 ```haskell
     -- Run supervisor in another thread
     (svQ, svAction) <- newActor $ newSimpleOneForOneSupervisor
     asyncSv <- async svAction
-    -- Request to run your process under the supervisor
-    let yourProcessSpec = newProcessSpec Temporary $ noWatch yourIOAction
-    maybeChildThreadId <- newChild def svQ yourProcessSpec
+    -- Request to run your action under the supervisor
+    let yourChildSpec = newChildSpec Temporary yourIOAction
+    maybeChildThreadId <- newChild def svQ yourChildSpec
 ```
 
 The idiom `newActor $ newSimpleOneForOneSupervisor` returns `(svQ, svAction)`
 where `svQ` is write-end of message queue for the supervisor actor and
 `svAction` is body IO action of the supervisor.  When the `svAction` is actually
-evaluated, it listens `svQ` and wait for request to run dynamic process.
+evaluated, it listens `svQ` and wait for request to run dynamic child.
 
 When `newChild` is called with `svQ`, it sends request to the supervisor to run
-a dynamic process with given `ProcessSpec`.
+a dynamic child with given `ChildSpec`.
 
-When the supervisor is terminated, requested processes are automatically
-killed by the supervisor if they are still running.
+When the supervisor is terminated, requested children are automatically killed
+by the supervisor if they are still running.
 
 To kill the supervisor, apply `cancel` to `asyncSv`.
 
@@ -443,28 +448,34 @@ listen message queue based on what the handler returned.
 
 To create a new state machine, prepare initial state of your state machine and
 define your message handler driving your state machine, apply `newStateMachine`
-to the initial state and handler.  You will get a `ActorHandler` so you can
-get an actor of the state machine by applying `newActor` to it.
+to the initial state and handler.  You will get a `ActorHandler` so you can get
+an actor of the state machine by applying `newActor` to it.
 
 ```haskell
-    (queue, action) <-  newActor $ newStateMachine yourInitialState yourHandler
+    (queue, action) <-  newActor $ newStateMachine initialState handler
+```
+Or you can use short-cut helper.
+
+```haskell
+    (queue, action) <-  newStateMachineActor initialState handler
 ```
 
 The `newStateMachine` returns write-end of message queue for the state machine
 and IO action to run.  You can run the IO action by `forkIO` or `async`, or you
 can let supervisor run it.
 
+User supplied message handler must have following type signature.
+
 ```haskell
 handler :: (state -> message -> IO (Either result state))
 ```
 
-When a message is sent to state machine's queue, it is automatically received
-by state machine framework, then the handler is called with current state and
-the message.  The handler must eturn either result or next state.  When `Left`
-(or result) is returned, the state machine stops and returned value of the IO
-action is `IO result`.  When `Right` (or state) is returned, the state machine
-updates current state with the returned state and wait for next incoming
-message.
+When a message is sent to state machine's queue, it is automatically received by
+state machine framework, then the handler is called with current state and the
+message.  The handler must return either result or next state.  When `Left` (or
+result) is returned, the state machine stops and returned value of the IO action
+is `IO result`.  When `Right` (or state) is returned, the state machine updates
+current state with the returned state and wait for next incoming message.
 
 
 # Design Considerations
@@ -472,28 +483,28 @@ message.
 ## Separate role of threads
 
 When you design thread hierarchy with this package, you have to follow design
-rule of Erlang/OTP where only supervisor can have child processes.
+rule of Erlang/OTP where only supervisor can have children threads.
 
-In Erlang/OTP, there are two type of process.
+In Erlang/OTP, there are two type of Erlang process.
 
 * Supervisor
 * Worker
 
-Supervisor has child processes and supervise them.  Worker does real task but
+Supervisor has children processes and supervise them.  Worker does real task but
 never has child process.
 
 Without this rule, you have to have both supervision functionality and real
 task processing functionality within single process.  That leads more complex
 implementation of process.
 
-With this rule, worker no longer have to take care of supervising children.
-But at the same time you cannot create child process directly from worker.
+With this rule, worker no longer have to take care of supervising children.  But
+at the same time you cannot create child process directly from worker.
 
 
 ## Key Difference from Erlang/OTP Supervisor
 
 * Mutable variables are shared
-* Dynamic processes are always `Temporary` processes
+* Dynamic children are always `Temporary`
 * No `shutdown` method to terminate child
 * No `RestForOne` strategy
 * Every actor has dedicated Haskell thread
@@ -501,26 +512,26 @@ But at the same time you cannot create child process directly from worker.
 
 ### Mutable variables are shared
 
-There is no "share nothing" concept in this package.  Message passed from one
-process to another process is shared between both processes.  This isn't a
-problem as long as message content is normal Haskell object.  Normal Haskell
-object is immutable.  Nobody mutates its value.  So, in normal Haskell object,
-sharing is identical to copying.
+While "share nothing" is a key concept of Erlang, there is no such guarantee in
+this package.  Message passed from one Haskell thread to another thread is
+shared between both threads.  This isn't a problem as long as message content is
+normal Haskell object.  Normal Haskell object is immutable.  Nobody mutates its
+value.  So, in normal Haskell object, sharing is identical to copying.
 
 However, when you pass mutable object like IORef, MVar, or TVar, do it with
-care.  Those object can be mutated by other process.
+care.  Those object can be mutated by other thread.
 
-### Dynamic processes are always `Temporary` processes
+### Dynamic children are always `Temporary`
 
-Process created by `newChild` always created as `Temporary` process regardless
-which restart type is designated in its spec.  `Temporary` processes are never
-been restarted by supervisor.  `Permanent` or `Transient` process must be a part
-of process list given to supervisor spec.
+Child thread created by `newChild` always created as `Temporary` child
+regardless which restart type is designated in its spec.  `Temporary` children
+are never been restarted by supervisor.  `Permanent` or `Transient` child must
+be a part of `ChildSpec` list given to supervisor spec.
 
 ### No `shutdown` method to terminate child
 
 When supervisor terminates its children, supervisor always throw asynchronous
-exception to children.  There is no option like `exit(Child, shutdown)` in
+exception to children.  There is no option like `exit(Child, shutdown)` found in
 Erlang/OTP.
 
 You must implement appropriate resource cleanup on asynchronous exception.
@@ -535,26 +546,26 @@ Only `OneForOne` and `OneForAll` restart strategy is supported.
 
 Unlike some of other actor implementations, each actor in this package has its
 own Haskell thread.  It means every actor has dedicated stack for each.  Thus
-calling blocking API in middle of message handling does *NOT* prevents other
+calling blocking API in middle of message handling does *NOT* prevent other
 actor running.
 
 Some actor implementation give thread and stack to an actor only when it handles
 incoming message.  In such implementation, actor has no thread and stack when
 it is waiting for next message.  This maximizes scalability.  Even though there
 are billions of actors, you only need *n* threads and stacks while you have *n*
-core processor.
+core micro processor.
 
-Downside of such implementation is it strictly disallows blocking operation in
-middle of message handling.  In such implementation, calling blocking API in
-single threaded actor system causes entire actor system stalls until the
-blocking API returns.
+A downside of such implementation is it strictly disallows blocking operation in
+middle of message handling.  In such implementation, calling a blocking API in
+an actor system running with single thread causes stall of entire actor system
+until the blocking API returns.
 
 That doesn't happen in this package.  Though you call any blocking API in middle
 of actor message handler, other Haskell threads continue running.
 
 Giving dedicated thread to each actor requires giving dedicated stack frame to
 each actor too.  It consumes more memory than the above design.  However, in
-Haskell it won't be a serious problem.  These are the reason why.
+Haskell, it won't be a serious problem.  These are the reason why.
 
 * In Haskell, size of stack frame starts from 1KB and grows as needed.
 * It can be moved by GC so no continuous address space is required at beginning.
