@@ -50,7 +50,7 @@ spec = do
     describe "Inbox receive" $ do
         prop "receives message in sent order" $ \xs -> do
             q <- newInbox def
-            for_ (xs :: [Int]) $ send $ Actor q
+            for_ (xs :: [Int]) $ send $ ActorQ q
             r <- for xs $ const $ receive q
             r `shouldBe` xs
 
@@ -60,13 +60,13 @@ spec = do
                 threadDelay 1000
                 r1 <- poll a
                 r1 `shouldSatisfy` isNothing
-                send (Actor q) "Hello"
+                send (ActorQ q) "Hello"
                 r2 <- wait a
                 r2 `shouldBe` "Hello"
 
         modifyMaxSuccess (const 10) $ modifyMaxSize (const 100000)  $ prop "concurrent read and write to the same queue" $ \xs -> do
             q <- newInbox def
-            let actor = Actor q
+            let actor = ActorQ q
             withAsync (for_ xs (send actor . Just) *> send actor Nothing) $ \_ -> do
                 let go ys = do
                         maybeInt <- receive q
@@ -79,7 +79,7 @@ spec = do
     describe "Inbox tryReceive" $ do
         prop "receives message in sent order" $ \xs -> do
             q <- newInbox def
-            for_ (xs :: [Int]) $ send $ Actor q
+            for_ (xs :: [Int]) $ send $ ActorQ q
             r <- for xs $ const $ tryReceive q
             r `shouldBe` map Just xs
 
@@ -91,7 +91,7 @@ spec = do
     describe "Inbox receiveSelect" $ do
         it "allows selective receive" $ do
             q <- newInbox def
-            let actor = Actor q
+            let actor = ActorQ q
 
             for_ ['a'..'z'] $ send actor
             r1 <- receiveSelect (== 'a') q
@@ -120,7 +120,7 @@ spec = do
 
         it "returns the first element satisfying supplied predicate" $ do
             q <- newInbox def
-            for_ "abcdefabcdef" $ send $ Actor q
+            for_ "abcdefabcdef" $ send $ ActorQ q
             r1 <- receiveSelect (\c -> c == 'c' || c == 'd' || c == 'e') q
             r1 `shouldBe` 'c'
             r2 <- for [1..11] $ const $ receive q
@@ -128,7 +128,7 @@ spec = do
 
         it "blocks until interesting message arrived" $ do
             q <- newInbox def
-            let actor = Actor q
+            let actor = ActorQ q
             for_ ['a'..'y'] $ send actor
             withAsync (receiveSelect (== 'z') q) $ \a -> do
                 r1 <- poll a
@@ -139,7 +139,7 @@ spec = do
 
         prop "keeps entire content if predicate was never satisfied" $ \xs -> do
             q <- newInbox def
-            let actor = Actor q
+            let actor = ActorQ q
             for_ (xs :: [Int]) $ send actor . Just
             for_ [1..2] $ \_ -> send actor Nothing
             let go ys = do
@@ -154,7 +154,7 @@ spec = do
 
         modifyMaxSuccess (const 10) $ modifyMaxSize (const 10000) $ prop "selectively reads massive number of messages concurrently" $ \xs -> do
             q <- newInbox def
-            let actor = Actor q
+            let actor = ActorQ q
             let evens = filter even xs :: [Int]
             withAsync (for_ xs (send actor . Just) *> send actor Nothing) $ \_ -> do
                 let evenOrNothing (Just n) = even n
@@ -175,7 +175,7 @@ spec = do
 
         it "allows selective receive" $ do
             q <- newInbox def
-            let actor = Actor q
+            let actor = ActorQ q
 
             for_ ['a'..'z'] $ send actor
             r1 <- tryReceiveSelect (== 'a') q
@@ -204,7 +204,7 @@ spec = do
 
         it "returns the first element satisfying supplied predicate" $ do
             q <- newInbox def
-            for_ "abcdefabcdef" $ send $ Actor q
+            for_ "abcdefabcdef" $ send $ ActorQ q
             r1 <- tryReceiveSelect (\c -> c == 'c' || c == 'd' || c == 'e') q
             r1 `shouldBe` Just 'c'
             r2 <- for [1..11] $ const $ receive q
@@ -212,13 +212,13 @@ spec = do
 
         it "return Nothing when there is no interesting message in the queue" $ do
             q <- newInbox def
-            for_ ['a'..'y'] $ send $ Actor q
+            for_ ['a'..'y'] $ send $ ActorQ q
             r <- tryReceiveSelect (== 'z') q
             r `shouldBe` Nothing
 
         prop "keeps entire content if predicate was never satisfied" $ \xs -> do
             q <- newInbox def
-            for_ xs $ send $ Actor q
+            for_ xs $ send $ ActorQ q
             rs <- for xs $ const $ tryReceiveSelect (const False) q
             rs `shouldBe` map (const Nothing) xs
             remains <- for xs $ const $ receive q
@@ -226,7 +226,7 @@ spec = do
 
         modifyMaxSuccess (const 10) $ modifyMaxSize (const 10000) $ prop "try selectively reads massive number of messages concurrently" $ \xs -> do
             q <- newInbox def
-            let actor = Actor q
+            let actor = ActorQ q
             let evens = filter even xs :: [Int]
             withAsync (for_ xs (send actor . Right) *> send actor (Left ())) $ \_ -> do
                 let evenOrLeft (Right n) = even n
@@ -244,14 +244,14 @@ spec = do
     describe "Inbox length" $ do
         prop "returns number of queued messages" $ \xs -> do
             q <- newInbox def
-            let actor = Actor q
+            let actor = ActorQ q
             for_ (xs :: [Int]) $ send actor
             qLen <- Sv.length actor
             qLen `shouldBe` (fromIntegral . length) xs
 
         prop "returns number of remaining messages" $ \(xs, ys)  -> do
             q <- newInbox def
-            let actor = Actor q
+            let actor = ActorQ q
             for_ (xs <> ys :: [Int]) $ send actor
             for_ xs $ const $ receive q
             qLen <- Sv.length actor
@@ -259,7 +259,7 @@ spec = do
 
         prop "remains unchanged after failing selective receives" $ \xs -> do
             q <- newInbox def
-            let actor = Actor q
+            let actor = ActorQ q
             for_ (xs :: [Int]) $ send actor
             qLenBefore <- Sv.length actor
             for_ xs $ const $ tryReceiveSelect (const False) q
@@ -270,7 +270,7 @@ spec = do
         prop "send blocks when the queue is full" $ \xs -> do
             let ys = 0:xs :: [Int]
             q <- newInbox $ InboxLength (fromIntegral $ length ys)
-            let actor = Actor q
+            let actor = ActorQ q
             marker <- newEmptyMVar
             let sender = do
                     for_ ys $ send actor
@@ -287,7 +287,7 @@ spec = do
 
         prop "trySend returns Nothing when the queue is full" $ \xs -> do
             q <- newInbox $ InboxLength (fromIntegral $ length (xs :: [Int]))
-            let actor = Actor q
+            let actor = ActorQ q
             for_ xs $ trySend actor
             r <- trySend actor 0
             r `shouldBe` Nothing
@@ -295,7 +295,7 @@ spec = do
         prop "readling from queue makes room again" $ \xs -> do
             let ys = 0:xs :: [Int]
             q <- newInbox $ InboxLength (fromIntegral $ length ys)
-            let actor = Actor q
+            let actor = ActorQ q
             for_ ys $ trySend actor
             r1 <- trySend actor 0
             r1 `shouldBe` Nothing
@@ -306,13 +306,13 @@ spec = do
     describe "Concurrent operation Inbox" $ do
         prop "receives messages from concurrent senders" $ \xs -> do
             q <- newInbox def
-            for_ (xs :: [Int]) $ \x -> async $ send (Actor q) x
+            for_ (xs :: [Int]) $ \x -> async $ send (ActorQ q) x
             ys <- for xs $ \_ -> receive q
             sort ys `shouldBe` sort xs
 
         prop "can be shared by concurrent receivers" $ \xs -> do
             q <- newInbox def
-            let actor = Actor q
+            let actor = ActorQ q
             for_ (xs :: [Int]) $ \x -> send actor $ IntVal x
             for_ xs $ \x -> send actor Fin
             send actor Fin
@@ -327,7 +327,7 @@ spec = do
 
         prop "can be shared by concurrent senders and receivers" $ \xs -> do
             q <- newInbox def
-            let actor = Actor q
+            let actor = ActorQ q
             let sender msg = do
                     mark <- newEmptyMVar
                     send actor $ IntVal msg

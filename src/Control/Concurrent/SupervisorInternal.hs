@@ -60,38 +60,38 @@ instance Default InboxLength where
     def = InboxLength maxBound
 
 -- | Write end of 'Inbox' exposed to outside of actor.
-newtype Actor a = Actor (Inbox a)
+newtype ActorQ a = ActorQ (Inbox a)
 
 -- | Create a new empty 'Inbox'.
 newInbox :: InboxLength -> IO (Inbox a)
 newInbox (InboxLength upperBound) = Inbox <$> newTQueueIO <*> newTVarIO 0 <*> newTVarIO [] <*> pure upperBound
 
--- | Send a message to given 'Actor'.  Block while the queue is full.
+-- | Send a message to given 'ActorQ'.  Block while the queue is full.
 send
-  :: Actor a    -- ^ Write-end of target actor's message queue.
+  :: ActorQ a   -- ^ Write-end of target actor's message queue.
   -> a          -- ^ Message to be sent.
   -> IO ()
-send (Actor (Inbox inbox lenTVar _ limit)) msg = atomically $ do
+send (ActorQ (Inbox inbox lenTVar _ limit)) msg = atomically $ do
     len <- readTVar lenTVar
     if len < limit
     then modifyTVar' lenTVar succ *> writeTQueue inbox msg
     else retrySTM
 
--- | Try to send a message to given 'Actor'.  Return Nothing if the queue is
+-- | Try to send a message to given 'ActorQ'.  Return Nothing if the queue is
 -- already full.
 trySend
-    :: Actor a  -- ^ Write-end of target actor's message queue.
+    :: ActorQ a -- ^ Write-end of target actor's message queue.
     -> a        -- ^ Message to be sent.
     -> IO (Maybe ())
-trySend (Actor (Inbox inbox lenTVar _ limit)) msg = atomically $ do
+trySend (ActorQ (Inbox inbox lenTVar _ limit)) msg = atomically $ do
     len <- readTVar lenTVar
     if len < limit
     then modifyTVar' lenTVar succ *> writeTQueue inbox msg $> Just ()
     else pure Nothing
 
--- | Number of elements currently held by the 'Actor'.
-length :: Actor a -> IO Word
-length (Actor q) = readTVarIO $ inboxLength q
+-- | Number of elements currently held by the 'ActorQ'.
+length :: ActorQ a -> IO Word
+length (ActorQ q) = readTVarIO $ inboxLength q
 
 {-|
     Perform selective receive from given 'Inbox'.
@@ -218,20 +218,20 @@ type ActorHandler message result = (Inbox message -> IO result)
 
     'newActor' creates a new 'Inbox', apply user supplied message handler to the
     queue, returns reference to write-end of the queue and IO action of the
-    actor.  Because 'newActor' only returns 'Actor', caller of 'newActor' can
+    actor.  Because 'newActor' only returns 'ActorQ', caller of 'newActor' can
     only send messages to created actor.  Caller cannot receive message from the
     queue.
 
     'Inbox', or read-end of the queue, is passed to user supplied message
     handler so the handler can receive message to the actor.  If the handler
-    need to send a message to itself, wrap the message queue by 'Actor'
-    constructor then use 'send' over created 'Actor'.  Here is an example.
+    need to send a message to itself, wrap the message queue by 'ActorQ'
+    constructor then use 'send' over created 'ActorQ'.  Here is an example.
 
-    > send (Actor yourInbox) message
+    > send (ActorQ yourInbox) message
 -}
 newActor
     :: ActorHandler message result  -- ^ IO action handling received messages.
-    -> IO (Actor message, IO result)
+    -> IO (ActorQ message, IO result)
 newActor = newBoundedActor def
 
 {-|
@@ -240,10 +240,10 @@ newActor = newBoundedActor def
 newBoundedActor
     :: InboxLength                  -- ^ Maximum length of inbox message queue.
     -> ActorHandler message result  -- ^ IO action handling received messages.
-    -> IO (Actor message, IO result)
+    -> IO (ActorQ message, IO result)
 newBoundedActor maxQLen handler = do
     q <- newInbox maxQLen
-    pure (Actor q, handler q)
+    pure (ActorQ q, handler q)
 
 {-
     State machine behavior.
@@ -278,7 +278,7 @@ newStateMachine initialState messageHandler inbox = go $ Right initialState
 -- | create an unbound actor of newStateMachine.  Short-cut of following.
 --
 -- > newActor $ newStateMachine initialState messageHandler
-newStateMachineActor :: state -> (state -> message -> IO (Either result state)) -> IO (Actor message, IO result)
+newStateMachineActor :: state -> (state -> message -> IO (Either result state)) -> IO (ActorQ message, IO result)
 newStateMachineActor initialState = newActor . newStateMachine initialState
 
 {-
@@ -291,7 +291,7 @@ type ServerCallback a = (a -> IO ())
     Send an asynchronous request to a server.
 -}
 cast
-    :: Actor cmd    -- ^ Message queue of the target server.
+    :: ActorQ cmd   -- ^ Message queue of the target server.
     -> cmd          -- ^ Request to the server.
     -> IO ()
 cast = send
@@ -307,7 +307,7 @@ instance Default CallTimeout where
 -}
 call
     :: CallTimeout                  -- ^ Timeout.
-    -> Actor cmd                    -- ^ Message queue of the target server.
+    -> ActorQ cmd                   -- ^ Message queue of the target server.
     -> (ServerCallback a -> cmd)    -- ^ Request to the server without callback supplied.
     -> IO (Maybe a)
 call (CallTimeout usec) srv req = do
@@ -328,7 +328,7 @@ call (CallTimeout usec) srv req = do
 -}
 callAsync
     :: CallTimeout                  -- ^ Timeout.
-    -> Actor cmd                    -- ^ Message queue.
+    -> ActorQ cmd                   -- ^ Message queue.
     -> (ServerCallback a -> cmd)    -- ^ Request to the server without callback supplied.
     -> (Maybe a -> IO b)            -- ^ callback to process return value of the call.  Nothing is given on timeout.
     -> IO (Async b)
@@ -336,7 +336,7 @@ callAsync timeout srv req cont = async $ call timeout srv req >>= cont
 
 -- | Send an request to a server but ignore return value.
 callIgnore
-    :: Actor cmd                    -- ^ Message queue of the target server.
+    :: ActorQ cmd                   -- ^ Message queue of the target server.
     -> (ServerCallback a -> cmd)    -- ^ Request to the server without callback supplied.
     -> IO ()
 callIgnore srv req = send srv $ req (\_ -> pure ())
@@ -523,7 +523,7 @@ data SupervisorMessage
     | StartChild ChildSpec (ServerCallback ThreadId)    -- ^ Command to start a new supervised thread.
 
 -- | Type synonym for write-end of supervisor's message queue.
-type SupervisorQueue = Actor SupervisorMessage
+type SupervisorQueue = ActorQ SupervisorMessage
 -- | Type synonym for read-end of supervisor's message queue.
 type SupervisorInbox = Inbox SupervisorMessage
 
@@ -615,7 +615,7 @@ newSupervisor
 newSupervisor strategy restartSensitivity childSpecs inbox = bracket newThreadMap (killAllSupervisedThread inbox) initSupervisor
   where
     initSupervisor children = do
-        startAllSupervisedThread (Actor inbox) children childSpecs
+        startAllSupervisedThread (ActorQ inbox) children childSpecs
         newStateMachine (newIntenseRestartDetector restartSensitivity) handler inbox
       where
         handler :: IntenseRestartDetector -> SupervisorMessage -> IO (Either () IntenseRestartDetector)
@@ -641,12 +641,12 @@ newSupervisor strategy restartSensitivity childSpecs inbox = bracket newThreadMa
             restartNeeded _         _      = True
 
         handler hist (StartChild (ChildSpec _ action) cont) =
-            (newSupervisedThread (Actor inbox) children (ChildSpec Temporary action) >>= cont) $> Right hist
+            (newSupervisedThread (ActorQ inbox) children (ChildSpec Temporary action) >>= cont) $> Right hist
 
-        restartChild OneForOne children spec = void $ newSupervisedThread (Actor inbox) children spec
+        restartChild OneForOne children spec = void $ newSupervisedThread (ActorQ inbox) children spec
         restartChild OneForAll children _    = do
             killAllSupervisedThread inbox children
-            startAllSupervisedThread (Actor inbox) children childSpecs
+            startAllSupervisedThread (ActorQ inbox) children childSpecs
 
 -- | Ask the supervisor to spawn new temporary child thread.  Returns 'ThreadId'
 -- of the new child.

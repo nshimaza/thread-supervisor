@@ -65,16 +65,16 @@ simpleCountingServer n = newStateMachine n handler
     handler s (CountUp cont) = cont s $> Right (s + 1)
     handler s Finish         = pure (Left s)
 
-callCountUp :: Actor SimpleCountingServerCmd -> IO (Maybe Int)
+callCountUp :: ActorQ SimpleCountingServerCmd -> IO (Maybe Int)
 callCountUp q = call def q CountUp
 
-castFinish :: Actor SimpleCountingServerCmd -> IO ()
+castFinish :: ActorQ SimpleCountingServerCmd -> IO ()
 castFinish q = cast q Finish
 
 spec :: Spec
 spec = do
     describe "Actor" $ do
-        prop "accepts ActorHandler and returns action with Actor" $ \n -> do
+        prop "accepts ActorHandler and returns action with ActorQ" $ \n -> do
             mark <- newEmptyMVar
             (actor, action) <- newActor receive
             send actor (n :: Int)
@@ -85,7 +85,7 @@ spec = do
             mark <- newEmptyMVar
             (actor, action) <- newActor $ \inbox -> do
                 msg <- receive inbox
-                send (Actor inbox) (msg + 1)
+                send (ActorQ inbox) (msg + 1)
                 receive inbox
             send actor (n :: Int)
             r2 <- action

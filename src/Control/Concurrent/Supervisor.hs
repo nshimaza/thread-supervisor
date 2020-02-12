@@ -42,7 +42,7 @@ module Control.Concurrent.Supervisor
         > send (Actor yourInbox) message
     -}
       Inbox
-    , Actor (..)
+    , ActorQ (..)
     , send
     , trySend
     , length
