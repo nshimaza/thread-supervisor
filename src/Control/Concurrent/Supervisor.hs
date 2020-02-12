@@ -77,6 +77,7 @@ module Control.Concurrent.Supervisor
         message is routed to what actor.
     -}
     , ActorHandler
+    , Actor (..)
     , newActor
     , newBoundedActor
     -- * Supervisable IO action

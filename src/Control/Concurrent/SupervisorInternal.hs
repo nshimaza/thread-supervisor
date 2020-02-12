@@ -210,6 +210,12 @@ tryReceive = tryReceiveSelect (const True)
 -- | Type synonym of user supplied message handler working inside actor.
 type ActorHandler message result = (Inbox message -> IO result)
 
+-- | Actor representation.
+data Actor message result = Actor
+    { actorQueue  :: ActorQ message -- ^ Write end of message queue of 'Actor'
+    , actorAction :: IO result      -- ^ IO action to execute 'Actor'
+    }
+
 {-|
     Create a new actor.
 
@@ -231,7 +237,7 @@ type ActorHandler message result = (Inbox message -> IO result)
 -}
 newActor
     :: ActorHandler message result  -- ^ IO action handling received messages.
-    -> IO (ActorQ message, IO result)
+    -> IO (Actor message result)
 newActor = newBoundedActor def
 
 {-|
@@ -240,10 +246,10 @@ newActor = newBoundedActor def
 newBoundedActor
     :: InboxLength                  -- ^ Maximum length of inbox message queue.
     -> ActorHandler message result  -- ^ IO action handling received messages.
-    -> IO (ActorQ message, IO result)
+    -> IO (Actor message result)
 newBoundedActor maxQLen handler = do
     q <- newInbox maxQLen
-    pure (ActorQ q, handler q)
+    pure . Actor (ActorQ q) $ handler q
 
 {-
     State machine behavior.
@@ -278,7 +284,7 @@ newStateMachine initialState messageHandler inbox = go $ Right initialState
 -- | create an unbound actor of newStateMachine.  Short-cut of following.
 --
 -- > newActor $ newStateMachine initialState messageHandler
-newStateMachineActor :: state -> (state -> message -> IO (Either result state)) -> IO (ActorQ message, IO result)
+newStateMachineActor :: state -> (state -> message -> IO (Either result state)) -> IO (Actor message result)
 newStateMachineActor initialState = newActor . newStateMachine initialState
 
 {-
