@@ -76,25 +76,25 @@ spec = do
     describe "Actor" $ do
         prop "accepts ActorHandler and returns action with ActorQ" $ \n -> do
             mark <- newEmptyMVar
-            Actor actor action <- newActor receive
-            send actor (n :: Int)
+            Actor actorQ action <- newActor receive
+            send actorQ (n :: Int)
             r2 <- action
             r2 `shouldBe` n
 
         prop "can send a message to itself" $ \n -> do
             mark <- newEmptyMVar
-            Actor actor action <- newActor $ \inbox -> do
+            Actor actorQ action <- newActor $ \inbox -> do
                 msg <- receive inbox
                 send (ActorQ inbox) (msg + 1)
                 receive inbox
-            send actor (n :: Int)
+            send actorQ (n :: Int)
             r2 <- action
             r2 `shouldBe` (n + 1)
 
     describe "State machine behavior" $ do
         it "returns result when event handler returns Left" $ do
-            Actor actor statem <- newActor $ newStateMachine () $ \_ _ -> pure $ Left "Hello"
-            send actor ()
+            Actor actorQ statem <- newActor $ newStateMachine () $ \_ _ -> pure $ Left "Hello"
+            send actorQ ()
             r <- statem
             r `shouldBe` "Hello"
 
@@ -102,8 +102,8 @@ spec = do
             let until5 q 5 = pure $ Left ("Done", q)
                 until5 q _ = pure $ Right q
                 actorHandler inbox = newStateMachine inbox until5 inbox
-            Actor actor statem <- newActor actorHandler
-            for_ [1..7] $ send actor
+            Actor actorQ statem <- newActor actorHandler
+            for_ [1..7] $ send actorQ
             (r, lastQ) <- statem
             r `shouldBe` "Done"
             msg <- receive lastQ
@@ -112,16 +112,16 @@ spec = do
         it "passes next state with Right" $ do
             let handler True  _ = pure $ Right False
                 handler False _ = pure $ Left "Finished"
-            Actor actor statem <- newActor $ newStateMachine True handler
-            for_ [(), ()] $ send actor
+            Actor actorQ statem <- newActor $ newStateMachine True handler
+            for_ [(), ()] $ send actorQ
             r <- statem
             r `shouldBe` "Finished"
 
         it "runs state machine by consuming messages until handler returns Left" $ do
             let handler n 10 = pure $ Left (n + 10)
                 handler n x  = pure $ Right (n + x)
-            Actor actor statem <- newActor $ newStateMachine 0 handler
-            for_ [1..100] $ send actor
+            Actor actorQ statem <- newActor $ newStateMachine 0 handler
+            for_ [1..100] $ send actorQ
             r <- statem
             r `shouldBe` 55
 
