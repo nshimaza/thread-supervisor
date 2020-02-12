@@ -5,13 +5,14 @@
 
 A simplified implementation of Erlang/OTP like supervisor over thread.
 
+
 # Overview
 
 This package provides Erlang/OTP like thread supervision.
 It provides automatic restart, escalation of intense crash, guaranteed cleanup
 of child threads on supervisor termination.
 
-### Motivation
+## Motivation
 
 Unlike Unix process, plain Haskell thread, created by forkIO, has no
 parent-child relation each other in its lifecycle management.  This means
@@ -39,8 +40,8 @@ just providing parent-child thread lifecycle management, this package provides
 Erlang/OTP like API so that user can leverage well proven practices from
 Erlang/OTP.
 
-If you need to keep your child running after parent terminated, this API is not
-for you.
+If you need to keep your child running after parent terminated, this package is
+not for you.
 
 ### Why not withAsync?
 
@@ -49,8 +50,8 @@ In short, `withAsync` addresses different problem than this package.
 * `withAsync`: Accessing multiple REST server concurrently then gather all
   responses with guarantee of cancellation of all the request on termination
   of calling thread.
-* `thread-supervisor`: Implementing server where unknown number of independent
-  concurrent requests with indeterministic lifecycle will arrive.
+* `thread-supervisor`: Implementing server where unknown number of independent,
+  concurrent, and indeterministic lifecycle requests will arrive.
 
 A typical use case for this package is TCP server style use case.  In such use
 case, you have to create unpredictable number of threads in order to serve to
@@ -61,7 +62,7 @@ package.  It is good for taking actions asynchronously but eventually you need
 their return values.  Or, even you aren't care of return values, you only need
 to take several finite number of actions concurrently.
 
-Bellow explains why `withAsync` is not good for managing large number of
+Below is explanation why `withAsync` is not good for managing large number of
 threads.
 
 `withAsync` is essentially a sugar over bracket pattern like this.
@@ -79,7 +80,8 @@ have to keep `inner` continue running until your `action` finishes.
 
 So, what if you kick async action go and make recursive call form `inner` back
 to your loop?  It is a bad idea.  Because `withAsync` is a `bracket`, recursive
-call from `inner` makes non-tail-recurse call.
+call from `inner` makes non-tail-recurse call.  It consumes stack every time you
+make recurring.
 
 In other words, the difference between `withAsync` and `thread-supervisor` is
 strategy of installing / un-installing cleanup handler.  `withAsync` installs
@@ -128,14 +130,14 @@ new thread.
 
 ```haskell
 runYourSupervisorWithStaticChildren = do
-    (svQ, svAction) <- newActor . newSupervisor $ OneForAll def
+    Actor svQ svAction <- newActor . newSupervisor $ OneForAll def
         [ newChildSpec Permanent yourIOAction1
         , newChildSpec Permanent yourIOAction2
         ]
     async svAction
 ```
 
-The idiom `newActor . newSupervisor` returns `(svQ, svAction)` where `svQ` is
+The idiom `newActor . newSupervisor` returns `Actor svQ svAction` where `svQ` is
 write-end of message queue for the supervisor actor, which we don't use here,
 and `svAction` is body IO action of the supervisor.  When the `svAction` is
 actually evaluated, it automatically forks two threads.  One is for
@@ -171,14 +173,14 @@ dynamic child.
 
 ```haskell
     -- Run supervisor in another thread
-    (svQ, svAction) <- newActor $ newSimpleOneForOneSupervisor
+    Actor svQ svAction <- newActor $ newSimpleOneForOneSupervisor
     asyncSv <- async svAction
     -- Request to run your action under the supervisor
     let yourChildSpec = newChildSpec Temporary yourIOAction
     maybeChildThreadId <- newChild def svQ yourChildSpec
 ```
 
-The idiom `newActor $ newSimpleOneForOneSupervisor` returns `(svQ, svAction)`
+The idiom `newActor $ newSimpleOneForOneSupervisor` returns `Actor svQ svAction`
 where `svQ` is write-end of message queue for the supervisor actor and
 `svAction` is body IO action of the supervisor.  When the `svAction` is actually
 evaluated, it listens `svQ` and wait for request to run dynamic child.
@@ -445,9 +447,10 @@ from a plain IO action and a restart type value.  `addMonitor` adds another
 monitor to existing `ChildSpec`.
 
 
-## Supervisor and underlying behaviors
 
-This package provides supervisor, server, and state machine behavior from
+# Behaviors
+
+This package provides state machine, server, and supervisor behavior from
 Erlang/OTP with slight modifications.
 
 All behaviors available in this package are defined as `ActorHandler` so that
@@ -456,20 +459,47 @@ they can be easily supervised by converting them to actor using `newActor`.
 Server behavior is built upon state machine behavior.  Supervisor is built on
 top of server behavior.
 
-Details of supervisor and other behaviors are described the next section.
+## State Machine behavior
 
-# Behaviors
+State machine behavior is most essential behavior in this package.  It provides
+framework for creating IO action of finite state machine running on its own
+thread.  State machine has single `Inbox`, its local state, and a user supplied
+message handler.  State machine is created with initial state value, waits for
+incoming message, passes received message and current state to user supplied
+handler, updates state to returned value from user supplied handler, stops or
+continue to listen message queue based on what the handler returned.
 
+To create a new state machine, prepare initial state of your state machine and
+define your message handler driving your state machine, apply `newStateMachine`
+to the initial state and handler.  You will get a `ActorHandler` so you can get
+an actor of the state machine by applying `newActor` to it.
 
-## Supervisor behavior
+```haskell
+Actor queue action <-  newActor $ newStateMachine initialState handler
+```
 
-WIP
+Or you can use short-cut helper.
 
-Supervisor behavior provides Erlang/OTP like thread supervision with some
-simplification.  
+```haskell
+Actor queue action <-  newStateMachineActor initialState handler
+```
 
+The `newStateMachine` returns write-end of message queue for the state machine
+and IO action to run.  You can run the IO action by `Control.Concurrent.forkIO`
+or `Control.Concurrent.async`, or you can let supervisor run it.
 
+User supplied message handler must have following type signature.
 
+```haskell
+handler :: (state -> message -> IO (Either result state))
+```
+
+When a message is sent to state machine's queue, it is automatically received by
+state machine framework, then the handler is called with current state and the
+message.  The handler must return either result or next state.  When `Left
+result` is returned, the state machine stops and returned value of the IO action
+is `IO result`.  When `Right state` is returned, the state machine updates
+current state with the returned state and wait for next incoming message.
 
 ## Server behavior
 
@@ -584,48 +614,13 @@ recommended in actor model.  It is because synchronous request blocks entire
 actor until it receives response or timeout.  You can mitigate the situation by
 wrapping the synchronous call with `async`.  Use `callAsync` for such purpose.
 
+## Supervisor behavior
 
-## State Machine behavior
+WIP
 
-State machine behavior is most essential behavior in this package.  It provides
-framework for creating IO action of finite state machine running on its own
-thread.  State machine has single `Inbox`, its local state, and a user supplied
-message handler.  State machine is created with initial state value, waits for
-incoming message, passes received message and current state to user supplied
-handler, updates state to returned value from user supplied handler, stops or
-continue to listen message queue based on what the handler returned.
+Supervisor behavior provides Erlang/OTP like thread supervision with some
+simplification.  
 
-To create a new state machine, prepare initial state of your state machine and
-define your message handler driving your state machine, apply `newStateMachine`
-to the initial state and handler.  You will get a `ActorHandler` so you can get
-an actor of the state machine by applying `newActor` to it.
-
-```haskell
-Actor queue action <-  newActor $ newStateMachine initialState handler
-```
-
-Or you can use short-cut helper.
-
-```haskell
-Actor queue action <-  newStateMachineActor initialState handler
-```
-
-The `newStateMachine` returns write-end of message queue for the state machine
-and IO action to run.  You can run the IO action by `Control.Concurrent.forkIO`
-or `Control.Concurrent.async`, or you can let supervisor run it.
-
-User supplied message handler must have following type signature.
-
-```haskell
-handler :: (state -> message -> IO (Either result state))
-```
-
-When a message is sent to state machine's queue, it is automatically received by
-state machine framework, then the handler is called with current state and the
-message.  The handler must return either result or next state.  When `Left
-result` is returned, the state machine stops and returned value of the IO action
-is `IO result`.  When `Right state` is returned, the state machine updates
-current state with the returned state and wait for next incoming message.
 
 
 # Design Considerations
