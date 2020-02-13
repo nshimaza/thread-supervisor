@@ -1,3 +1,5 @@
 # Changelog for thread-supervisor
 
-## Unreleased changes
+## Version 0.1.0.0
+
+* First release
