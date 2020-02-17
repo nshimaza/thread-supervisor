@@ -1,47 +1,25 @@
+{-# OPTIONS_GHC -Wno-type-defaults #-}
+
 module Control.Concurrent.SupervisorInternalSpec where
 
 import           Data.Char                             (chr, ord)
 import           Data.Default                          (def)
 import           Data.Foldable                         (for_)
-import           Data.Functor                          (($>))
 import           Data.List                             (sort)
-import           Data.Maybe                            (fromJust, isJust,
-                                                        isNothing)
+import           Data.Maybe                            (fromJust, isNothing)
 import           Data.Traversable                      (for)
-import           System.Clock                          (TimeSpec (..),
-                                                        fromNanoSecs)
-import           UnliftIO                              (StringException (..),
-                                                        async, asyncThreadId,
-                                                        atomically, cancel,
-                                                        fromException,
-                                                        newEmptyMVar,
-                                                        newTQueueIO, poll,
-                                                        putMVar, readMVar,
-                                                        readTQueue, takeMVar,
-                                                        throwString,
-                                                        tryReadTQueue, wait,
-                                                        withAsync, writeTQueue)
+import           UnliftIO                              (async, newEmptyMVar,
+                                                        poll, putMVar, takeMVar,
+                                                        wait, withAsync)
 import           UnliftIO.Concurrent                   (threadDelay)
 
 import           Test.Hspec
 import           Test.Hspec.QuickCheck
-import           Test.QuickCheck
 
 import           Control.Concurrent.SupervisorInternal hiding (length)
 import qualified Control.Concurrent.SupervisorInternal as Sv (length)
 
 {-# ANN module "HLint: ignore Reduce duplication" #-}
-
-instance Eq ExitReason where
-    (UncaughtException e) == _  = error "should not compare exception by Eq"
-    _ == (UncaughtException e)  = error "should not compare exception by Eq"
-    Normal == Normal            = True
-    Killed == Killed            = True
-    _ == _                      = False
-
-reasonToString :: ExitReason -> String
-reasonToString  (UncaughtException e) = toStr $ fromException e
-  where toStr (Just (StringException str _)) = str
 
 data IntFin = Fin | IntVal Int
 
@@ -281,7 +259,7 @@ spec = do
                 threadDelay 1000
                 r1 <- poll a
                 r1 `shouldSatisfy` isNothing
-                receive q
+                _ <- receive q
                 r2 <- wait a
                 r2 `shouldBe` ()
 
@@ -299,7 +277,7 @@ spec = do
             for_ ys $ trySend actorQ
             r1 <- trySend actorQ 0
             r1 `shouldBe` Nothing
-            receive q
+            _ <- receive q
             r2 <- trySend actorQ 1
             r2 `shouldBe` Just ()
 
@@ -314,7 +292,7 @@ spec = do
             q <- newInbox def
             let actorQ = ActorQ q
             for_ (xs :: [Int]) $ \x -> send actorQ $ IntVal x
-            for_ xs $ \x -> send actorQ Fin
+            for_ xs $ \_ -> send actorQ Fin
             send actorQ Fin
             let receiver msgs = do
                     msg <- receive q
@@ -329,7 +307,7 @@ spec = do
             q <- newInbox def
             let actorQ = ActorQ q
             let sender msg = do
-                    mark <- newEmptyMVar
+                    _ <- newEmptyMVar
                     send actorQ $ IntVal msg
                     pure ()
                 receiver msgs = do
@@ -340,7 +318,7 @@ spec = do
             marks <- for (xs :: [Int]) $ \x -> async $ sender x
             as <- for xs $ \_ -> async $ receiver []
             for_ marks wait
-            for_ xs $ \x -> send actorQ Fin
+            for_ xs $ \_ -> send actorQ Fin
             send actorQ Fin
             rs <- for as wait
             (sort . concat) rs `shouldBe` sort xs

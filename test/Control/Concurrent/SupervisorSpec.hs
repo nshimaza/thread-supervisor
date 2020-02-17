@@ -1,3 +1,6 @@
+{-# OPTIONS_GHC -Wno-orphans       #-}
+{-# OPTIONS_GHC -Wno-type-defaults #-}
+
 module Control.Concurrent.SupervisorSpec where
 
 import           Data.Default                  (def)
@@ -7,9 +10,7 @@ import           Data.List                     (unzip4)
 import           Data.Maybe                    (isJust, isNothing)
 import           Data.Traversable              (for)
 import           Data.Typeable                 (typeOf)
-import           System.Clock                  (Clock (Monotonic),
-                                                TimeSpec (..), getTime,
-                                                toNanoSecs)
+import           System.Clock                  (TimeSpec (..))
 import           UnliftIO                      (StringException (..), async,
                                                 asyncThreadId, atomically,
                                                 cancel, fromException,
@@ -21,29 +22,30 @@ import           UnliftIO                      (StringException (..), async,
                                                 throwString, wait, withAsync,
                                                 withAsyncWithUnmask,
                                                 writeTQueue, writeTVar)
-import           UnliftIO.Concurrent           (ThreadId, killThread,
-                                                myThreadId, threadDelay)
+import           UnliftIO.Concurrent           (killThread, myThreadId,
+                                                threadDelay)
 
 import           Test.Hspec
 import           Test.Hspec.QuickCheck
-import           Test.QuickCheck
 
 import           Control.Concurrent.Supervisor hiding (length)
-import qualified Control.Concurrent.Supervisor as Sv (length)
 
 {-# ANN module "HLint: ignore Reduce duplication" #-}
 {-# ANN module "HLint: ignore Use head" #-}
 
 instance Eq ExitReason where
-    (UncaughtException e) == _  = error "should not compare exception by Eq"
-    _ == (UncaughtException e)  = error "should not compare exception by Eq"
+    (UncaughtException _) == _  = error "should not compare exception by Eq"
+    _ == (UncaughtException _)  = error "should not compare exception by Eq"
     Normal == Normal            = True
     Killed == Killed            = True
     _ == _                      = False
 
 reasonToString :: ExitReason -> String
-reasonToString  (UncaughtException e) = toStr $ fromException e
-  where toStr (Just (StringException str _)) = str
+reasonToString (UncaughtException e)    = toStr $ fromException e
+  where
+    toStr (Just (StringException str _)) = str
+    toStr _                              = error "Not a StringException"
+reasonToString _                        = error "ExitReason is not Uncaught Exception"
 
 data ConstServerCmd = AskFst (ServerCallback Int) | AskSnd (ServerCallback Char)
 
@@ -75,14 +77,12 @@ spec :: Spec
 spec = do
     describe "Actor" $ do
         prop "accepts ActorHandler and returns action with ActorQ" $ \n -> do
-            mark <- newEmptyMVar
             Actor actorQ action <- newActor receive
             send actorQ (n :: Int)
             r2 <- action
             r2 `shouldBe` n
 
         prop "can send a message to itself" $ \n -> do
-            mark <- newEmptyMVar
             Actor actorQ action <- newActor $ \inbox -> do
                 msg <- receive inbox
                 send (ActorQ inbox) (msg + 1)
@@ -246,7 +246,7 @@ spec = do
                 reasonToString reason1 `shouldBe` "oops"
                 (reason2, tid2) <- takeMVar mark2
                 tid2 `shouldBe` asyncThreadId a
-                reasonToString reason1 `shouldBe` "oops"
+                reasonToString reason2 `shouldBe` "oops"
 
         it "can nest monitors and notify Killed to both" $ do
             blocker <- newEmptyMVar
@@ -316,7 +316,7 @@ spec = do
                     readMVar trigger
                     atomically $ writeTVar var 1
                     putMVar mark ()
-                    readMVar blocker
+                    _ <- readMVar blocker
                     pure ()
                 isJust maybeChildAsync `shouldBe` True
                 currentVal0 <- readTVarIO var
@@ -332,7 +332,7 @@ spec = do
                 startMark <- newEmptyMVar
                 trigger <- newEmptyMVar
                 finishMark <- newEmptyMVar
-                Just a <- newChild def svQ $ newChildSpec restart $ do
+                Just _ <- newChild def svQ $ newChildSpec restart $ do
                     putMVar startMark ()
                     readMVar trigger
                     putMVar finishMark ()
@@ -368,8 +368,8 @@ spec = do
             Actor svQ sv <- newActor newSimpleOneForOneSupervisor
             withAsync sv $ \_ -> do
                 for_ procs $ newChild def svQ
-                rs <- for childQs callCountUp
-                rs `shouldBe` Just <$> [1..10]
+                rs1 <- for childQs callCountUp
+                rs1 `shouldBe` Just <$> [1..10]
             reports <- for childMons takeMVar
             reports `shouldSatisfy` all ((==) Killed . fst)
 
@@ -385,9 +385,9 @@ spec = do
             Actor svQ sv <- newActor newSimpleOneForOneSupervisor
             withAsync sv $ \_ -> do
                 for_ procs $ newChild def svQ
-                rs <- for childQs callCountUp
-                rs `shouldBe` Just <$> [1..volume]
-                async $ for_ childQs $ \ch -> threadDelay 1 *> castFinish ch
+                rs1 <- for childQs callCountUp
+                rs1 `shouldBe` Just <$> [1..volume]
+                _ <- async $ for_ childQs $ \ch -> threadDelay 1 *> castFinish ch
                 threadDelay 10000
             reports <- for childMons takeMVar
             length reports `shouldBe` volume
@@ -474,8 +474,8 @@ spec = do
                 let monitor reason tid  = putMVar childMon (reason, tid)
                     process             = newMonitoredChildSpec Permanent $ watch monitor $ child $> ()
                 pure (childQ, childMon, process)
-            let (childQs, childMons, procs) = unzip3 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForOne def procs
+            let (childQs, _, procs) = unzip3 rs
+            Actor _ sv <- newActor $ newSupervisor OneForOne def procs
             withAsync sv $ \_ -> do
                 rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1,2,3]
@@ -490,7 +490,7 @@ spec = do
                     process             = newMonitoredChildSpec Permanent $ watch monitor $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForOne def { restartSensitivityIntensity = 3 } procs
+            Actor _ sv <- newActor $ newSupervisor OneForOne def { restartSensitivityIntensity = 3 } procs
             withAsync sv $ \_ -> do
                 rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1,2,3]
@@ -513,7 +513,7 @@ spec = do
                     process             = newMonitoredChildSpec restart $ watch monitor $ putMVar marker () *> takeMVar trigger $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForOne def { restartSensitivityIntensity = 2 } procs
+            Actor _ sv <- newActor $ newSupervisor OneForOne def { restartSensitivityIntensity = 2 } procs
             withAsync sv $ \_ -> do
                 rs1 <- for markers takeMVar
                 rs1 `shouldBe` [(), ()]
@@ -521,8 +521,8 @@ spec = do
                 reports <- for childMons takeMVar
                 reports `shouldSatisfy` all ((==) Normal . fst)
                 threadDelay 1000
-                rs <- for markers $  \m -> isEmptyMVar m
-                rs `shouldBe` [True, True]
+                rs2 <- for markers $  \m -> isEmptyMVar m
+                rs2 `shouldBe` [True, True]
 
         it "restarts crashed transient child but does not restart crashed temporary child" $ do
             rs <- for [Transient, Temporary] $ \restart -> do
@@ -533,7 +533,7 @@ spec = do
                     process             = newMonitoredChildSpec restart $ watch monitor $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForOne def { restartSensitivityIntensity = 2 } procs
+            Actor _ sv <- newActor $ newSupervisor OneForOne def { restartSensitivityIntensity = 2 } procs
             withAsync sv $ \_ -> do
                 rs1 <- for markers takeMVar
                 rs1 `shouldBe` [(), ()]
@@ -541,8 +541,8 @@ spec = do
                 reports <- for childMons takeMVar
                 reports `shouldSatisfy` all ((==) "oops" . reasonToString . fst)
                 threadDelay 10000
-                rs <- for markers $  \m -> isEmptyMVar m
-                rs `shouldBe` [False, True]
+                rs2 <- for markers $  \m -> isEmptyMVar m
+                rs2 `shouldBe` [False, True]
 
         it "restarts killed transient child but does not restart killed temporary child" $ do
             blocker <- newEmptyMVar
@@ -553,15 +553,15 @@ spec = do
                     process             = newMonitoredChildSpec restart $ watch monitor $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForOne def { restartSensitivityIntensity = 2 } procs
+            Actor _ sv <- newActor $ newSupervisor OneForOne def { restartSensitivityIntensity = 2 } procs
             withAsync sv $ \_ -> do
                 tids <- for markers takeMVar
                 for_ tids killThread
                 reports <- for childMons takeMVar
                 reports `shouldSatisfy` all ((==) Killed . fst)
                 threadDelay 10000
-                rs <- for markers $ \m -> isEmptyMVar m
-                rs `shouldBe` [False, True]
+                rs1 <- for markers $ \m -> isEmptyMVar m
+                rs1 `shouldBe` [False, True]
 
         it "kills all children when it is killed" $ do
             rs <- for [1..10] $ \n -> do
@@ -571,10 +571,10 @@ spec = do
                     process             = newMonitoredChildSpec Permanent $ watch monitor $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForOne def procs
+            Actor _ sv <- newActor $ newSupervisor OneForOne def procs
             withAsync sv $ \_ -> do
-                rs <- for childQs callCountUp
-                rs `shouldBe` Just <$> [1..10]
+                rs1 <- for childQs callCountUp
+                rs1 `shouldBe` Just <$> [1..10]
             reports <- for childMons takeMVar
             reports `shouldSatisfy` all ((==) Killed . fst)
 
@@ -587,11 +587,11 @@ spec = do
                     process             = newMonitoredChildSpec Permanent $ watch monitor $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForOne def { restartSensitivityIntensity = 1000 } procs
+            Actor _ sv <- newActor $ newSupervisor OneForOne def { restartSensitivityIntensity = 1000 } procs
             withAsync sv $ \_ -> do
-                rs <- for childQs callCountUp
-                rs `shouldBe` Just <$> [1..volume]
-                async $ for_ childQs $ \ch -> threadDelay 1 *> castFinish ch
+                rs1 <- for childQs callCountUp
+                rs1 `shouldBe` Just <$> [1..volume]
+                _ <- async $ for_ childQs $ \ch -> threadDelay 1 *> castFinish ch
                 threadDelay 10000
             reports <- for childMons $ atomically . readTQueue
             length reports `shouldBe` volume
@@ -609,7 +609,7 @@ spec = do
                     process             = newMonitoredChildSpec Permanent $ watch monitor $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForOne def procs
+            Actor _ sv <- newActor $ newSupervisor OneForOne def procs
             withAsync sv $ \a -> do
                 rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1,2]
@@ -627,7 +627,7 @@ spec = do
                 r `shouldBe` ()
 
         it "intensive crash of permanent child causes termination of Supervisor itself" $ do
-            rs <- for [1,2] $ \n -> do
+            rs <- for [1,2] $ \_ -> do
                 marker <- newEmptyMVar
                 trigger <- newEmptyMVar
                 childMon <- newEmptyMVar
@@ -635,7 +635,7 @@ spec = do
                     process             = newMonitoredChildSpec Permanent $ watch monitor $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForOne def procs
+            Actor _ sv <- newActor $ newSupervisor OneForOne def procs
             withAsync sv $ \a -> do
                 rs1 <- for markers takeMVar
                 rs1 `shouldBe` [(), ()]
@@ -653,14 +653,14 @@ spec = do
 
         it "intensive killing permanent child causes termination of Supervisor itself" $ do
             blocker <- newEmptyMVar
-            rs <- for [1,2] $ \n -> do
+            rs <- for [1,2] $ \_ -> do
                 marker <- newEmptyMVar
                 childMon <- newEmptyMVar
                 let monitor reason tid  = putMVar childMon (reason, tid)
                     process             = newMonitoredChildSpec Permanent $ watch monitor $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForOne def procs
+            Actor _ sv <- newActor $ newSupervisor OneForOne def procs
             withAsync sv $ \a -> do
                 tids <- for markers takeMVar
                 killThread $ head tids
@@ -684,7 +684,7 @@ spec = do
                     process             = newMonitoredChildSpec Transient $ watch monitor $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForOne def procs
+            Actor _ sv <- newActor $ newSupervisor OneForOne def procs
             withAsync sv $ \a -> do
                 rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1..10]
@@ -698,7 +698,7 @@ spec = do
                 r `shouldSatisfy` isNothing
 
         it "intensive crash of transient child causes termination of Supervisor itself" $ do
-            rs <- for [1,2] $ \n -> do
+            rs <- for [1,2] $ \_ -> do
                 marker <- newEmptyMVar
                 trigger <- newEmptyMVar
                 childMon <- newEmptyMVar
@@ -706,7 +706,7 @@ spec = do
                     process             = newMonitoredChildSpec Transient $ watch monitor $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForOne def procs
+            Actor _ sv <- newActor $ newSupervisor OneForOne def procs
             withAsync sv $ \a -> do
                 rs1 <- for markers takeMVar
                 rs1 `shouldBe` [(), ()]
@@ -724,14 +724,14 @@ spec = do
 
         it "intensive killing transient child causes termination of Supervisor itself" $ do
             blocker <- newEmptyMVar
-            rs <- for [1,2] $ \n -> do
+            rs <- for [1,2] $ \_ -> do
                 marker <- newEmptyMVar
                 childMon <- newEmptyMVar
                 let monitor reason tid  = putMVar childMon (reason, tid)
                     process             = newMonitoredChildSpec Transient $ watch monitor $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForOne def procs
+            Actor _ sv <- newActor $ newSupervisor OneForOne def procs
             withAsync sv $ \a -> do
                 tids <- for markers takeMVar
                 killThread $ head tids
@@ -755,7 +755,7 @@ spec = do
                     process             = newMonitoredChildSpec Temporary $ watch monitor $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForOne def procs
+            Actor _ sv <- newActor $ newSupervisor OneForOne def procs
             withAsync sv $ \a -> do
                 rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1..10]
@@ -769,7 +769,7 @@ spec = do
                 r `shouldSatisfy` isNothing
 
         it "intensive crash of temporary child does not terminate Supervisor" $ do
-            rs <- for [1..10] $ \n -> do
+            rs <- for [1..10] $ \_ -> do
                 marker <- newEmptyMVar
                 trigger <- newEmptyMVar
                 childMon <- newEmptyMVar
@@ -777,7 +777,7 @@ spec = do
                     process             = newMonitoredChildSpec Temporary $ watch monitor $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForOne def procs
+            Actor _ sv <- newActor $ newSupervisor OneForOne def procs
             withAsync sv $ \a -> do
                 rs1 <- for markers takeMVar
                 rs1 `shouldBe` replicate 10 ()
@@ -789,7 +789,7 @@ spec = do
                 r `shouldSatisfy` isNothing
 
         it "intensive kiling temporary child does not terminate Supervisor" $ do
-            rs <- for [1..10] $ \n -> do
+            rs <- for [1..10] $ \_ -> do
                 marker <- newEmptyMVar
                 blocker <- newEmptyMVar
                 childMon <- newEmptyMVar
@@ -797,7 +797,7 @@ spec = do
                     process             = newMonitoredChildSpec Temporary $ watch monitor $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForOne def procs
+            Actor _ sv <- newActor $ newSupervisor OneForOne def procs
             withAsync sv $ \a -> do
                 tids <- for markers takeMVar
                 for_ tids killThread
@@ -815,7 +815,7 @@ spec = do
                     process             = newMonitoredChildSpec Permanent $ watch monitor $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForOne def { restartSensitivityPeriod = TimeSpec 0 1000 } procs
+            Actor _ sv <- newActor $ newSupervisor OneForOne def { restartSensitivityPeriod = TimeSpec 0 1000 } procs
             withAsync sv $ \a -> do
                 rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1..10]
@@ -829,7 +829,7 @@ spec = do
                 r `shouldSatisfy` isNothing
 
         it "longer interval multiple crash of transient child does not terminate Supervisor" $ do
-            rs <- for [1..10] $ \n -> do
+            rs <- for [1..10] $ \_ -> do
                 marker <- newEmptyMVar
                 trigger <- newEmptyMVar
                 childMon <- newEmptyMVar
@@ -837,7 +837,7 @@ spec = do
                     process             = newMonitoredChildSpec Transient $ watch monitor $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForOne def { restartSensitivityPeriod = TimeSpec 0 1000 } procs
+            Actor _ sv <- newActor $ newSupervisor OneForOne def { restartSensitivityPeriod = TimeSpec 0 1000 } procs
             withAsync sv $ \a -> do
                 rs1 <- for markers takeMVar
                 rs1 `shouldBe` replicate 10 ()
@@ -849,7 +849,7 @@ spec = do
                 r `shouldSatisfy` isNothing
 
         it "longer interval multiple killing transient child does not terminate Supervisor" $ do
-            rs <- for [1..10] $ \n -> do
+            rs <- for [1..10] $ \_ -> do
                 marker <- newEmptyMVar
                 blocker <- newEmptyMVar
                 childMon <- newEmptyMVar
@@ -857,7 +857,7 @@ spec = do
                     process             = newMonitoredChildSpec Transient $ watch monitor $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForOne def { restartSensitivityPeriod = TimeSpec 0 1000 } procs
+            Actor _ sv <- newActor $ newSupervisor OneForOne def { restartSensitivityPeriod = TimeSpec 0 1000 } procs
             withAsync sv $ \a -> do
                 tids <- for markers takeMVar
                 for_ tids $ \tid -> threadDelay 1000 *> killThread tid
@@ -875,8 +875,8 @@ spec = do
                 let monitor reason tid  = putMVar childMon (reason, tid)
                     process             = newMonitoredChildSpec Permanent $ watch monitor $ child $> ()
                 pure (childQ, childMon, process)
-            let (childQs, childMons, procs) = unzip3 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForAll def procs
+            let (childQs, _, procs) = unzip3 rs
+            Actor _ sv <- newActor $ newSupervisor OneForAll def procs
             withAsync sv $ \_ -> do
                 rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1,2,3]
@@ -891,7 +891,7 @@ spec = do
                     process             = newMonitoredChildSpec Permanent $ watch monitor $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForAll def procs
+            Actor _ sv <- newActor $ newSupervisor OneForAll def procs
             withAsync sv $ \_ -> do
                 rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1,2,3]
@@ -914,7 +914,7 @@ spec = do
                     process             = newMonitoredChildSpec restart $ watch monitor $ putMVar marker () *> takeMVar trigger $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForAll def { restartSensitivityIntensity = 2 } procs
+            Actor _ sv <- newActor $ newSupervisor OneForAll def { restartSensitivityIntensity = 2 } procs
             withAsync sv $ \_ -> do
                 rs1 <- for markers takeMVar
                 rs1 `shouldBe` [(), ()]
@@ -940,9 +940,9 @@ spec = do
                     process             = newMonitoredChildSpec restart $ watch monitor $ (myThreadId >>= putMVar marker) *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForAll def { restartSensitivityIntensity = 2 } procs
+            Actor _ sv <- newActor $ newSupervisor OneForAll def { restartSensitivityIntensity = 2 } procs
             withAsync sv $ \a -> do
-                rs1 <- for markers takeMVar
+                for_ markers takeMVar
                 putMVar (head triggers) ()
                 reports <- for childMons takeMVar
                 fst (reports !! 0) `shouldSatisfy` ((==) "oops" . reasonToString)
@@ -950,14 +950,13 @@ spec = do
                 threadDelay 1000
                 tids <- for markers takeMVar
                 killThread $ head tids
-                reports <- for childMons takeMVar
-                fst <$> reports `shouldBe` [Killed, Killed]
+                reports1 <- for childMons takeMVar
+                fst <$> reports1 `shouldBe` [Killed, Killed]
                 threadDelay 1000
                 rs3 <- for markers takeMVar
                 typeOf <$> rs3 `shouldBe` replicate 2 (typeOf $ asyncThreadId a)
 
         it "does not restarts any children even if a temporary child crashed" $ do
-            blocker <- newEmptyMVar
             rs <- for [Transient, Temporary] $ \restart -> do
                 marker <- newEmptyMVar
                 trigger <- newEmptyMVar
@@ -966,7 +965,7 @@ spec = do
                     process             = newMonitoredChildSpec restart $ watch monitor $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForAll def procs
+            Actor _ sv <- newActor $ newSupervisor OneForAll def procs
             withAsync sv $ \_ -> do
                 rs1 <- for markers takeMVar
                 rs1 `shouldBe` [(), ()]
@@ -978,7 +977,6 @@ spec = do
                 rs2 `shouldBe` [True, True]
 
         it "does not restarts any children even if a temporary child killed" $ do
-            blocker <- newEmptyMVar
             rs <- for [Transient, Temporary] $ \restart -> do
                 marker <- newEmptyMVar
                 trigger <- newEmptyMVar
@@ -986,8 +984,8 @@ spec = do
                 let monitor reason tid  = putMVar childMon (reason, tid)
                     process             = newMonitoredChildSpec restart $ watch monitor $ (myThreadId >>= putMVar marker) *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, process)
-            let (markers, triggers, childMons, procs) = unzip4 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForAll def procs
+            let (markers, _, childMons, procs) = unzip4 rs
+            Actor _ sv <- newActor $ newSupervisor OneForAll def procs
             withAsync sv $ \_ -> do
                 tids <- for markers takeMVar
                 killThread $ tids !! 1
@@ -1005,10 +1003,10 @@ spec = do
                     process             = newMonitoredChildSpec Permanent $ watch monitor $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForAll def procs
+            Actor _ sv <- newActor $ newSupervisor OneForAll def procs
             withAsync sv $ \_ -> do
-                rs <- for childQs callCountUp
-                rs `shouldBe` Just <$> [1..10]
+                rs1 <- for childQs callCountUp
+                rs1 `shouldBe` Just <$> [1..10]
             reports <- for childMons takeMVar
             reports `shouldSatisfy` all ((==) Killed . fst)
 
@@ -1021,11 +1019,11 @@ spec = do
                     process             = newMonitoredChildSpec Permanent $ watch monitor $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForAll def procs
+            Actor _ sv <- newActor $ newSupervisor OneForAll def procs
             withAsync sv $ \_ -> do
-                rs <- for childQs callCountUp
-                rs `shouldBe` Just <$> [1..volume]
-                async $ threadDelay 1 *> castFinish (head childQs)
+                rs1 <- for childQs callCountUp
+                rs1 `shouldBe` Just <$> [1..volume]
+                _ <- async $ threadDelay 1 *> castFinish (head childQs)
                 threadDelay 10000
             reports <- for childMons $ atomically . readTQueue
             (fst . head) reports `shouldBe` Normal
@@ -1039,7 +1037,7 @@ spec = do
                     process             = newMonitoredChildSpec Permanent $ watch monitor $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForAll def procs
+            Actor _ sv <- newActor $ newSupervisor OneForAll def procs
             withAsync sv $ \a -> do
                 rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1,2]
@@ -1057,7 +1055,7 @@ spec = do
                 r `shouldBe` ()
 
         it "intensive crash of permanent child causes termination of Supervisor itself" $ do
-            rs <- for [1,2] $ \n -> do
+            rs <- for [1,2] $ \_ -> do
                 marker <- newEmptyMVar
                 trigger <- newEmptyMVar
                 childMon <- newEmptyMVar
@@ -1065,7 +1063,7 @@ spec = do
                     process             = newMonitoredChildSpec Permanent $ watch monitor $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForAll def procs
+            Actor _ sv <- newActor $ newSupervisor OneForAll def procs
             withAsync sv $ \a -> do
                 rs1 <- for markers takeMVar
                 rs1 `shouldBe` [(), ()]
@@ -1085,14 +1083,14 @@ spec = do
 
         it "intensive killing permanent child causes termination of Supervisor itself" $ do
             blocker <- newEmptyMVar
-            rs <- for [1,2] $ \n -> do
+            rs <- for [1,2] $ \_ -> do
                 marker <- newEmptyMVar
                 childMon <- newEmptyMVar
                 let monitor reason tid  = putMVar childMon (reason, tid)
                     process             = newMonitoredChildSpec Permanent $ watch monitor $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForAll def procs
+            Actor _ sv <- newActor $ newSupervisor OneForAll def procs
             withAsync sv $ \a -> do
                 tids <- for markers takeMVar
                 killThread $ head tids
@@ -1116,7 +1114,7 @@ spec = do
                     process             = newMonitoredChildSpec Transient $ watch monitor $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForAll def procs
+            Actor _ sv <- newActor $ newSupervisor OneForAll def procs
             withAsync sv $ \a -> do
                 rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1..10]
@@ -1130,7 +1128,7 @@ spec = do
                 r `shouldSatisfy` isNothing
 
         it "intensive crash of transient child causes termination of Supervisor itself" $ do
-            rs <- for [1,2] $ \n -> do
+            rs <- for [1,2] $ \_ -> do
                 marker <- newEmptyMVar
                 trigger <- newEmptyMVar
                 childMon <- newEmptyMVar
@@ -1138,7 +1136,7 @@ spec = do
                     process             = newMonitoredChildSpec Transient $ watch monitor $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForAll def procs
+            Actor _ sv <- newActor $ newSupervisor OneForAll def procs
             withAsync sv $ \a -> do
                 rs1 <- for markers takeMVar
                 rs1 `shouldBe` [(), ()]
@@ -1158,14 +1156,14 @@ spec = do
 
         it "intensive killing transient child causes termination of Supervisor itself" $ do
             blocker <- newEmptyMVar
-            rs <- for [1,2] $ \n -> do
+            rs <- for [1,2] $ \_ -> do
                 marker <- newEmptyMVar
                 childMon <- newEmptyMVar
                 let monitor reason tid  = putMVar childMon (reason, tid)
                     process             = newMonitoredChildSpec Transient $ watch monitor $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForAll def procs
+            Actor _ sv <- newActor $ newSupervisor OneForAll def procs
             withAsync sv $ \a -> do
                 tids1 <- for markers takeMVar
                 killThread $ head tids1
@@ -1189,7 +1187,7 @@ spec = do
                     process             = newMonitoredChildSpec Temporary $ watch monitor $ child $> ()
                 pure (childQ, childMon, process)
             let (childQs, childMons, procs) = unzip3 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForAll def procs
+            Actor _ sv <- newActor $ newSupervisor OneForAll def procs
             withAsync sv $ \a -> do
                 rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1..10]
@@ -1203,7 +1201,7 @@ spec = do
                 r `shouldSatisfy` isNothing
 
         it "intensive crash of temporary child does not terminate Supervisor" $ do
-            rs <- for [1..10] $ \n -> do
+            rs <- for [1..10] $ \_ -> do
                 marker <- newEmptyMVar
                 trigger <- newEmptyMVar
                 childMon <- newEmptyMVar
@@ -1211,7 +1209,7 @@ spec = do
                     process             = newMonitoredChildSpec Temporary $ watch monitor $ putMVar marker () *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, childMon, process)
             let (markers, triggers, childMons, procs) = unzip4 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForAll def procs
+            Actor _ sv <- newActor $ newSupervisor OneForAll def procs
             withAsync sv $ \a -> do
                 rs1 <- for markers takeMVar
                 rs1 `shouldBe` replicate 10 ()
@@ -1223,7 +1221,7 @@ spec = do
                 r `shouldSatisfy` isNothing
 
         it "intensive kiling temporary child does not terminate Supervisor" $ do
-            rs <- for [1..10] $ \n -> do
+            rs <- for [1..10] $ \_ -> do
                 marker <- newEmptyMVar
                 blocker <- newEmptyMVar
                 childMon <- newEmptyMVar
@@ -1231,7 +1229,7 @@ spec = do
                     process             = newMonitoredChildSpec Temporary $ watch monitor $ (myThreadId >>= putMVar marker) *> takeMVar blocker $> ()
                 pure (marker, childMon, process)
             let (markers, childMons, procs) = unzip3 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForAll def procs
+            Actor _ sv <- newActor $ newSupervisor OneForAll def procs
             withAsync sv $ \a -> do
                 tids <- for markers takeMVar
                 for_ tids killThread
@@ -1247,7 +1245,7 @@ spec = do
                 let process             = newChildSpec Permanent $ child $> ()
                 pure (childQ, process)
             let (childQs, procs) = unzip rs
-            Actor svQ sv <- newActor $ newSupervisor OneForAll def { restartSensitivityPeriod = TimeSpec 0 1000 } procs
+            Actor _ sv <- newActor $ newSupervisor OneForAll def { restartSensitivityPeriod = TimeSpec 0 1000 } procs
             withAsync sv $ \a -> do
                 rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1..10]
@@ -1257,38 +1255,38 @@ spec = do
                 threadDelay 1000
                 r <- poll a
                 r `shouldSatisfy` isNothing
-                rs1 <- for childQs callCountUp
-                rs1 `shouldBe` Just <$> [1..10]
+                rs3 <- for childQs callCountUp
+                rs3 `shouldBe` Just <$> [1..10]
 
         it "longer interval multiple crash of transient child does not terminate Supervisor" $ do
-            rs <- for [1..10] $ \n -> do
+            rs <- for [1..10] $ \_ -> do
                 marker <- newTVarIO False
                 trigger <- newEmptyMVar
                 let process             = newChildSpec Transient $ atomically (writeTVar marker True) *> takeMVar trigger *> throwString "oops" $> ()
                 pure (marker, trigger, process)
             let (markers, triggers, procs) = unzip3 rs
-            Actor svQ sv <- newActor $ newSupervisor OneForAll def { restartSensitivityPeriod = TimeSpec 0 1000 } procs
+            Actor _ sv <- newActor $ newSupervisor OneForAll def { restartSensitivityPeriod = TimeSpec 0 1000 } procs
             withAsync sv $ \a -> do
                 threadDelay 1000
                 rs1 <- for markers readTVarIO
                 rs1 `shouldBe` replicate 10 True
-                rs1 <- for markers $ \m -> atomically $ writeTVar m True
+                _ <- for markers $ \m -> atomically $ writeTVar m True
                 for_ triggers $ \t -> threadDelay 1000 *> putMVar t ()
                 threadDelay 1000
                 r <- poll a
                 r `shouldSatisfy` isNothing
-                rs1 <- for markers readTVarIO
-                rs1 `shouldBe` replicate 10 True
+                rs2 <- for markers readTVarIO
+                rs2 `shouldBe` replicate 10 True
 
         it "longer interval multiple killing transient child does not terminate Supervisor" $ do
             myTid <- myThreadId
-            rs <- for [1..3] $ \n -> do
+            rs <- for [1..3] $ \_ -> do
                 marker <- newTVarIO myTid
                 blocker <- newEmptyMVar
                 let process             = newChildSpec Transient $ (myThreadId >>= atomically . writeTVar marker) *> takeMVar blocker $> ()
                 pure (marker, process)
             let (markers, procs) = unzip rs
-            Actor svQ sv <- newActor $ newSupervisor OneForAll def procs
+            Actor _ sv <- newActor $ newSupervisor OneForAll def procs
             withAsync sv $ \a -> do
                 threadDelay 10000
                 tids <- for markers readTVarIO
@@ -1297,5 +1295,5 @@ spec = do
                 threadDelay 1000
                 r <- poll a
                 r `shouldSatisfy` isNothing
-                tids <- for markers readTVarIO
-                tids `shouldSatisfy` notElem myTid
+                tids1 <- for markers readTVarIO
+                tids1 `shouldSatisfy` notElem myTid

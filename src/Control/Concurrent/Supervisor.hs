@@ -109,9 +109,9 @@ module Control.Concurrent.Supervisor
         > myActorHandler inbox = do
         >     newMessage <- receive inbox
         >     doSomethingWith newMessage
-        > 
+        >
         >     send (ActorQ inbox) messageToMyself -- Send a message to itself.
-        > 
+        >
         >     myActorHandler inbox
     -}
       Inbox
@@ -125,7 +125,7 @@ module Control.Concurrent.Supervisor
     , tryReceiveSelect
     -- ** Actor
     {-|
-        Actor is IO action emulating Erlang's actor.  
+        Actor is IO action emulating Erlang's actor.
         It has a dedicated 'Inbox' and processes incoming messages until
         reaching end state.
 
@@ -372,7 +372,7 @@ module Control.Concurrent.Supervisor
         message handling part.  For simplicity, this example doesn't have
         internal state and it never finishes.
 
-        Define a state machine message handler handling @myServerCommand@.  
+        Define a state machine message handler handling @myServerCommand@.
 
         > myHandler :: () -> MyServerCommand -> IO (Either () ())
         > myHandler _  ReqWithoutResp1                  = doJob1 $> Right ()

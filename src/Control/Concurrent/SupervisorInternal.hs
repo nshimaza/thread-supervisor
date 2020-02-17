@@ -20,18 +20,17 @@ import           Data.Default
 import           Data.Foldable       (foldl', for_, traverse_)
 import           Data.Functor        (($>))
 import           Data.Map.Strict     (Map, delete, empty, insert, keys, lookup)
-import           System.Clock        (Clock (Monotonic), TimeSpec (..),
-                                      diffTimeSpec, getTime)
-import           UnliftIO            (Async, IORef, STM, SomeException, TMVar,
-                                      TQueue, TVar, async, atomically, bracket,
-                                      catch, catchAny, finally, mask_,
-                                      modifyIORef', modifyTVar',
-                                      newEmptyTMVarIO, newIORef, newTQueueIO,
-                                      newTVarIO, putTMVar, readIORef,
-                                      readTQueue, readTVar, readTVarIO,
-                                      retrySTM, takeTMVar, throwIO, timeout,
-                                      tryReadTQueue, uninterruptibleMask_,
-                                      writeIORef, writeTQueue, writeTVar)
+import           System.Clock        (Clock (Monotonic), TimeSpec (..), getTime)
+import           UnliftIO            (Async, IORef, STM, SomeException, TQueue,
+                                      TVar, async, atomically, bracket, catch,
+                                      catchAny, finally, mask_, modifyIORef',
+                                      modifyTVar', newEmptyTMVarIO, newIORef,
+                                      newTQueueIO, newTVarIO, putTMVar,
+                                      readIORef, readTQueue, readTVar,
+                                      readTVarIO, retrySTM, takeTMVar, throwIO,
+                                      timeout, tryReadTQueue,
+                                      uninterruptibleMask_, writeIORef,
+                                      writeTQueue, writeTVar)
 import           UnliftIO.Concurrent (ThreadId, forkIOWithUnmask, killThread,
                                       myThreadId)
 
@@ -184,7 +183,7 @@ tryReceiveSelect predicate (Inbox inbox lenTVar saveStack _) = atomically $ do
 pickFromSaveStack :: (a -> Bool) -> [a] -> Maybe (a, [a])
 pickFromSaveStack predicate saveStack = go [] $ reverse saveStack
   where
-    go newSaved []                    = Nothing
+    go _        []                    = Nothing
     go newSaved (x:xs) | predicate x  = Just (x, foldl' (flip (:)) newSaved xs)
                        | otherwise    = go (x:newSaved) xs
 
@@ -338,7 +337,7 @@ callAsync
     -> (ServerCallback a -> cmd)    -- ^ Request to the server without callback supplied.
     -> (Maybe a -> IO b)            -- ^ callback to process return value of the call.  Nothing is given on timeout.
     -> IO (Async b)
-callAsync timeout srv req cont = async $ call timeout srv req >>= cont
+callAsync tout srv req cont = async $ call tout srv req >>= cont
 
 -- | Send an request to a server but ignore return value.
 callIgnore
@@ -649,10 +648,10 @@ newSupervisor strategy restartSensitivity childSpecs inbox = bracket newThreadMa
         handler hist (StartChild (ChildSpec _ action) cont) =
             (newSupervisedThread (ActorQ inbox) children (ChildSpec Temporary action) >>= cont) $> Right hist
 
-        restartChild OneForOne children spec = void $ newSupervisedThread (ActorQ inbox) children spec
-        restartChild OneForAll children _    = do
-            killAllSupervisedThread inbox children
-            startAllSupervisedThread (ActorQ inbox) children childSpecs
+    restartChild OneForOne children spec = void $ newSupervisedThread (ActorQ inbox) children spec
+    restartChild OneForAll children _    = do
+        killAllSupervisedThread inbox children
+        startAllSupervisedThread (ActorQ inbox) children childSpecs
 
 -- | Ask the supervisor to spawn new temporary child thread.  Returns 'ThreadId'
 -- of the new child.
@@ -661,4 +660,4 @@ newChild
     -> SupervisorQueue  -- ^ Inbox message queue of the supervisor to ask new thread.
     -> ChildSpec        -- ^ Child specification of the thread to spawn.
     -> IO (Maybe ThreadId)
-newChild timeout sv spec = call timeout sv $ StartChild spec
+newChild tout sv spec = call tout sv $ StartChild spec

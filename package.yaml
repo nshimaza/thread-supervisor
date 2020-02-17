@@ -19,6 +19,15 @@ category:            Concurrency
 # common to point users to the README.md file.
 description:         Please see the README on Github at <https://github.com/nshimaza/thread-supervisor#readme>
 
+ghc-options:
+- -Wall
+- -Wcompat
+- -Widentities
+- -Wincomplete-record-updates
+- -Wincomplete-uni-patterns
+- -Wpartial-fields
+- -Wredundant-constraints
+
 dependencies:
 - base >= 4.7 && < 5
 - clock

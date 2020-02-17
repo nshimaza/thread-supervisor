@@ -29,7 +29,7 @@ module Data.DelayedQueue
     , pop
     ) where
 
-import           Data.Sequence (Seq, ViewL ((:<)), empty, viewl, (|>))
+import           Data.Sequence (Seq, ViewL ((:<), EmptyL), empty, viewl, (|>))
 
 -- | Queue with delay before elements become available to dequeue.
 data DelayedQueue a = DelayedQueue Int (Seq a) deriving (Eq, Show)
@@ -52,5 +52,7 @@ pop
     :: DelayedQueue a               -- ^ 'DelayedQueue' from which a value to be pulled.
     -> Maybe (a, DelayedQueue a)    -- ^ Nothing if there is no available element.
                                     --   Returns pulled value and 'DelayedQueue' with the value removed wrapped in Just.
-pop (DelayedQueue delay sq) | length sq > delay = case viewl sq of (x :< xs) -> Just (x, DelayedQueue delay xs)
+pop (DelayedQueue delay sq) | length sq > delay = case viewl sq of
+                                                    (x :< xs)   -> Just (x, DelayedQueue delay xs)
+                                                    EmptyL      -> Nothing
                             | otherwise         = Nothing
