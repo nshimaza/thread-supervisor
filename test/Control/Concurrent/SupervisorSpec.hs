@@ -1270,7 +1270,7 @@ spec = do
                 threadDelay 1000
                 rs1 <- for markers readTVarIO
                 rs1 `shouldBe` replicate 10 True
-                _ <- for markers $ \m -> atomically $ writeTVar m True
+                for_ markers $ \m -> atomically $ writeTVar m True
                 for_ triggers $ \t -> threadDelay 1000 *> putMVar t ()
                 threadDelay 1000
                 r <- poll a
