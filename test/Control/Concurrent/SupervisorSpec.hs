@@ -1024,7 +1024,7 @@ spec = do
                 rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1..volume]
                 _ <- async $ threadDelay 1 *> castFinish (head childQs)
-                threadDelay 10000
+                threadDelay (100 * 1000)
             reports <- for childMons $ atomically . readTQueue
             (fst . head) reports `shouldBe` Normal
             tail reports `shouldSatisfy` all ((==) Killed . fst)
