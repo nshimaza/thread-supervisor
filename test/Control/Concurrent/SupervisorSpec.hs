@@ -387,8 +387,8 @@ spec = do
                 for_ procs $ newChild def svQ
                 rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1..volume]
-                _ <- async $ for_ childQs $ \ch -> threadDelay 1 *> castFinish ch
-                threadDelay 10000
+                _ <- async $ for_ childQs $ \ch -> threadDelay 1000 *> castFinish ch
+                threadDelay (100 * 1000)
             reports <- for childMons takeMVar
             length reports `shouldBe` volume
             let normalCount = length . filter ((==) Normal . fst) $ reports
@@ -466,7 +466,7 @@ spec = do
                 (result, _)     = detectIntenseRestart detector3 crash3
             result `shouldBe` False
 
-    describe "One-for-one Supervisor with static childlen" $ do
+    describe "One-for-one Supervisor with static children" $ do
         it "automatically starts children based on given ProcessSpec list" $ do
             rs <- for [1,2,3] $ \n -> do
                 childMon <- newEmptyMVar
@@ -591,8 +591,8 @@ spec = do
             withAsync sv $ \_ -> do
                 rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1..volume]
-                _ <- async $ for_ childQs $ \ch -> threadDelay 1 *> castFinish ch
-                threadDelay 10000
+                _ <- async $ for_ childQs $ \ch -> threadDelay 1000 *> castFinish ch
+                threadDelay (100 * 1000)
             reports <- for childMons $ atomically . readTQueue
             length reports `shouldBe` volume
             let normalCount = length . filter ((==) Normal . fst) $ reports
@@ -788,7 +788,7 @@ spec = do
                 r <- poll a
                 r `shouldSatisfy` isNothing
 
-        it "intensive kiling temporary child does not terminate Supervisor" $ do
+        it "intensive killing temporary child does not terminate Supervisor" $ do
             rs <- for [1..10] $ \_ -> do
                 marker <- newEmptyMVar
                 blocker <- newEmptyMVar
@@ -867,7 +867,7 @@ spec = do
                 r <- poll a
                 r `shouldSatisfy` isNothing
 
-    describe "One-for-all Supervisor with static childlen" $ do
+    describe "One-for-all Supervisor with static children" $ do
         it "automatically starts children based on given ProcessSpec list" $ do
             rs <- for [1,2,3] $ \n -> do
                 childMon <- newEmptyMVar
@@ -1023,7 +1023,7 @@ spec = do
             withAsync sv $ \_ -> do
                 rs1 <- for childQs callCountUp
                 rs1 `shouldBe` Just <$> [1..volume]
-                _ <- async $ threadDelay 1 *> castFinish (head childQs)
+                _ <- async $ threadDelay 1000 *> castFinish (head childQs)
                 threadDelay (100 * 1000)
             reports <- for childMons $ atomically . readTQueue
             (fst . head) reports `shouldBe` Normal
@@ -1220,7 +1220,7 @@ spec = do
                 r <- poll a
                 r `shouldSatisfy` isNothing
 
-        it "intensive kiling temporary child does not terminate Supervisor" $ do
+        it "intensive killing temporary child does not terminate Supervisor" $ do
             rs <- for [1..10] $ \_ -> do
                 marker <- newEmptyMVar
                 blocker <- newEmptyMVar
