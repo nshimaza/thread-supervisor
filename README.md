@@ -1,7 +1,7 @@
 # thread-supervisor
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-brightgreen.svg)](https://opensource.org/licenses/MIT)
-[![Build Status](https://travis-ci.org/nshimaza/thread-supervisor.svg?branch=master)](https://travis-ci.org/nshimaza/thread-supervisor)
+[![Build Status](https://github.com/nshimaza/thread-supervisor/workflows/build/badge.svg)](https://github.com/nshimaza/thread-supervisor/actions?query=workflow%3Abuild)
 [![Hackage](https://img.shields.io/hackage/v/thread-supervisor.svg?style=flat)](https://hackage.haskell.org/package/thread-supervisor)
 [![Stackage Nightly](http://stackage.org/package/thread-supervisor/badge/nightly)](http://stackage.org/nightly/package/thread-supervisor)
 [![Stackage LTS](http://stackage.org/package/thread-supervisor/badge/lts)](http://stackage.org/lts/package/thread-supervisor)
