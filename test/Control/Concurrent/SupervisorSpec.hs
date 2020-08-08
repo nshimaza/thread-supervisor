@@ -85,7 +85,7 @@ spec = do
         prop "can send a message to itself" $ \n -> do
             Actor actorQ action <- newActor $ \inbox -> do
                 msg <- receive inbox
-                send (ActorQ inbox) (msg + 1)
+                sendToMe inbox (msg + 1)
                 receive inbox
             send actorQ (n :: Int)
             r2 <- action

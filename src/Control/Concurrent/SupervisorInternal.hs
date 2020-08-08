@@ -76,6 +76,13 @@ send (ActorQ (Inbox inbox lenTVar _ limit)) msg = atomically $ do
     then modifyTVar' lenTVar succ *> writeTQueue inbox msg
     else retrySTM
 
+-- | Send a message to sending actor itself.  Block while the queue is full.
+sendToMe
+    :: Inbox a  -- ^ Inbox the message to be send to.
+    -> a        -- ^ Message to be sent.
+    -> IO ()
+sendToMe = send . ActorQ
+
 -- | Try to send a message to given 'ActorQ'.  Return Nothing if the queue is
 -- already full.
 trySend
@@ -87,6 +94,14 @@ trySend (ActorQ (Inbox inbox lenTVar _ limit)) msg = atomically $ do
     if len < limit
     then modifyTVar' lenTVar succ *> writeTQueue inbox msg $> Just ()
     else pure Nothing
+
+-- | Try to end a message to sending actor itself.  Return Nothing if the queue
+-- is already full.
+trySendToMe
+    :: Inbox a  -- ^ Inbox the message to be send to.
+    -> a        -- ^ Message to be sent.
+    -> IO (Maybe ())
+trySendToMe = trySend . ActorQ
 
 -- | Number of elements currently held by the 'ActorQ'.
 length :: ActorQ a -> IO Word

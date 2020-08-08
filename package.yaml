@@ -1,5 +1,5 @@
 name:                thread-supervisor
-version:             0.1.0.1
+version:             0.2.0.0
 github:              "nshimaza/thread-supervisor"
 license:             MIT
 author:              "Naoto Shimazaki"

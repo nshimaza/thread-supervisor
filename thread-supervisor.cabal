@@ -5,7 +5,7 @@ cabal-version: 1.12
 -- see: https://github.com/sol/hpack
 
 name:           thread-supervisor
-version:        0.1.0.1
+version:        0.2.0.0
 synopsis:       A simplified implementation of Erlang/OTP like supervisor over thread
 description:    Please see the README on Github at <https://github.com/nshimaza/thread-supervisor#readme>
 category:       Concurrency

@@ -227,11 +227,11 @@ of the queue before and after restart of the actor.  Actor consists of message
 queue and its handler.  `Inbox` is a message queue designed for actor's message
 inbox.  It is thread-safe, bounded or unbounded, and selectively readable queue.
 
-To protect read-end of the queue, it has different type for read-end and
+To protect read-end of the queue, separate types are given to read-end and
 write-end.  Message handler of actor can access to both end but only write-end
 is accessible from outside of message handler.  To realize this, constructor of
-`Inbox` is not exposed.  The only way to create a new `Inbox` object is creating
-a new actor using `newActor` function.
+message queue are not exposed.  The only way to create a new `Inbox` object is
+creating a new actor using `newActor` function.
 
 ```haskell
 newActor :: (Inbox message -> IO result) -> IO (Actor message result)
@@ -263,16 +263,16 @@ queue, caller of `newActor` gets write-end only.
 `Inbox` is specifically designed queue for implementing actor.  All behaviors
 available in this package depend on it.  It provides following capabilities.
 
-* Thread-safe read/pull/receive and write/push/send.
+* Thread-safe read and write.
 * Blocking and non-blocking read operation.
 * Selective read operation.
 * Current queue length.
 * Bounded queue.
 
-The type `Inbox` is intended to be used only for pulling side as inbox of actor.
-Single Inbox object is only readable from single actor.  In order to avoid from
-other actors, no Inbox constructor is exposed but instead you can get it only
-via `newActor` or `newBoundedActor`.
+The type `Inbox` is intended to be used only for reading side as inbox of actor.
+Single `Inbox` object is only readable from single actor.  In order to avoid
+reading from other actors, no constructors are exposed but instead you can get
+it only via `newActor` or `newBoundedActor`.
 
 #### Read an oldest message from `Inbox`
 
@@ -299,21 +299,21 @@ and the message.
 ```
 
 `ActorQ` is write-end of actor's message queue.  `ActorQ` is actually just a
-wrapper of `Inbox`.  Its role is hiding read-end API of Inbox.  From outside of
-actor, only write-end is exposed via ActorQ.  From inside of actor, both
+wrapper of `Inbox`.  Its role is hiding read-end API of `Inbox`.  From outside
+of actor, only write-end is exposed via `ActorQ`.  From inside of actor, both
 read-end and write-end are available.  You can read from given inbox directly.
-You need to wrap the inbox by Actor when you write to the inbox.
+You can write to given inbox with `sendToMe`.
 
 #### Send a message from an actor to itself
 
-When you need to send a message to your inbox, do this.
+When you need to send a message from an actor to the actor itself, call
+`sendToMe`.
 
 ```haskell
-    send (ActorQ yourInbox) message
+    sendToMe :: Inbox message -> message -> IO ()
 ```
 
-You can convert `Inbox` (read-end) to `ActorQ` (write-end) by wrapping `Inbox`
-by `ActorQ` so that you can send a message from an actor to itself.
+Following code demonstrates how entire actor handler will look like.
 
 ```haskell
 myActorHandler :: Inbox YourMessageType -> IO ()
@@ -321,7 +321,7 @@ myActorHandler inbox = do
     newMessage <- receive inbox
     doSomethingWith newMessage
 
-    send (ActorQ inbox) messageToMyself -- Send a message to itself.
+    sendToMe inbox messageToMyself  -- Send a message to itself.
 
     myActorHandler inbox
 ```
@@ -682,9 +682,11 @@ When supervisor terminates its children, supervisor always throw asynchronous
 exception to children.  There is no option like `exit(Child, shutdown)` found in
 Erlang/OTP.
 
-You must implement appropriate resource cleanup on asynchronous exception.
-You can implement graceful shutdown by yourself but it does not arrow you escape
-from dealing with asynchronous exception.
+You must implement appropriate resource cleanup on asynchronous exception.  You
+can implement graceful shutdown by yourself and it is always a good practice.
+However it does not arrow you escape from dealing with asynchronous exception.
+This package decided not to enforce you to implement graceful shutdown but
+leaves it your choice.
 
 ### No `RestForOne` strategy
 
