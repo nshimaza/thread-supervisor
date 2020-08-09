@@ -77,6 +77,8 @@ send (ActorQ (Inbox inbox lenTVar _ limit)) msg = atomically $ do
     else retrySTM
 
 -- | Send a message to sending actor itself.  Block while the queue is full.
+--
+-- @since 0.2.0.0
 sendToMe
     :: Inbox a  -- ^ Inbox the message to be send to.
     -> a        -- ^ Message to be sent.
@@ -97,6 +99,8 @@ trySend (ActorQ (Inbox inbox lenTVar _ limit)) msg = atomically $ do
 
 -- | Try to end a message to sending actor itself.  Return Nothing if the queue
 -- is already full.
+--
+-- @since 0.2.0.0
 trySendToMe
     :: Inbox a  -- ^ Inbox the message to be send to.
     -> a        -- ^ Message to be sent.
