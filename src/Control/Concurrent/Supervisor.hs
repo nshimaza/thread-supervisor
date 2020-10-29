@@ -196,7 +196,7 @@ module Control.Concurrent.Supervisor
         parameters, user supplied callback must have type signature 'Monitor',
         which is following.
 
-        > ExitReason -> ThreadId -> IO ()
+        > type Monitor = ExitReason -> ThreadId -> IO ()
 
         Function 'watch' installs your callback to your plain IO action then
         returns monitored action.
@@ -211,7 +211,7 @@ module Control.Concurrent.Supervisor
 
         The signature of 'MonitoredAction' is this.
 
-        > (IO () -> IO ()) -> IO ()
+        > type MonitoredAction = (IO () -> IO ()) -> IO ()
 
         It requires an extra function argument.  It is because 'MonitoredAction'
         will be invoked with 'UnliftIO.Concurrent.forkIOWithUnmask'.
@@ -322,12 +322,12 @@ module Control.Concurrent.Supervisor
     {-|
         Server behavior provides synchronous request-response style
         communication, a.k.a. ask pattern, with actor.  Server behavior allows
-        user to send a request to an actor then wait for response form the
+        user to send a request to an actor then wait for response from the
         actor.  This package provides a framework for implementing such actor.
 
         Server behavior in this package is actually a set of helper functions
         and type synonym to help implementing ask pattern over actor.  User need
-        to follow some of rules described below to utilize those helpers.
+        to follow several rules described below to utilize those helpers.
     -}
     -- ** Define ADT type for messages
     {-|

@@ -17,7 +17,7 @@ of child threads on supervisor termination.
 
 ## Motivation
 
-Unlike Unix process, plain Haskell thread, created by forkIO, has no
+Unlike Unix process, plain Haskell thread, created by `forkIO`, has no
 parent-child relation each other in its lifecycle management.  This means
 termination of parent thread doesn't result its children also terminated.
 This is good design as a low level API because it gives user greatest
@@ -34,7 +34,7 @@ This is prone to create thread leakage.  You can accidentally lose thread ID of
 child thread by crash of parent thread.  Now you no longer have way to kill
 orphaned child thread.  This is thread leakage.
 
-The low level forkIO API requires you keep track and manage entire thread
+The low level `forkIO` API requires you keep track and manage entire thread
 lifecycle including accidental case like the above.  Hand crafting it might be
 painful.
 
@@ -388,7 +388,7 @@ terminated.  In order to receive those parameters, user supplied callback must
 have type signature `Monitor`, which is following.
 
 ```haskell
-ExitReason -> ThreadId -> IO ()
+type Monitor = ExitReason -> ThreadId -> IO ()
 ```
 
 Function `watch` installs your callback to your plain IO action then returns
@@ -404,7 +404,7 @@ technical deep dive for describing why it has such signature.
 The signature of `MonitoredAction` is this.
 
 ```haskell
-(IO () -> IO ()) -> IO ()
+type MonitoredAction = (IO () -> IO ()) -> IO ()
 ```
 
 It requires an extra function argument.  It is because `MonitoredAction` will be
@@ -422,7 +422,7 @@ mask_ $ forkIOWithUnmask $ \unmask -> unmask action `finally` callback
 ```
 
 The extra function parameter in the signature of `MonitoredAction` is used for
-accepting the @unmask@ function which is passed by
+accepting the `unmask` function which is passed by
 `UnliftIO.Concurrent.forkIOWithUnmask`.  Functions defined in this section help
 installing callback and converting type to fit to
 `UnliftIO.Concurrent.forkIOWithUnmask`.
@@ -508,12 +508,12 @@ current state with the returned state and wait for next incoming message.
 
 Server behavior provides synchronous request-response style communication,
 a.k.a. ask pattern, with actor.  Server behavior allows user to send a request
-to an actor then wait for response form the actor.  This package provides a
+to an actor then wait for response from the actor.  This package provides a
 framework for implementing such actor.
 
 Server behavior in this package is actually a set of helper functions and type
-synonym to help implementing ask pattern over actor.  User need to follow some
-of rules described below to utilize those helpers.
+synonym to help implementing ask pattern over actor.  User need to follow
+several rules described below to utilize those helpers.
 
 ### Define ADT type for messages
 
